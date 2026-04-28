@@ -22,6 +22,8 @@ WALK_INTERVAL_MAX = 4.0
 
 RUN_DURATION = 120  # total seconds to run
 
+ROBOT_ID = "26"
+
 robot_pos = {"x": None, "y": None}  # updated by MQTT
 
 
@@ -33,19 +35,11 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        print(data)
-        # Expected format: {"x": 0.3, "y": -0.1, ...} or a list of robots.
-        # If the topic publishes a list, find this robot by id if available.
-        if isinstance(data, list):
-            # Take the first entry as our robot; adapt if you have a robot id
-            entry = data[0] if data else {}
-        else:
-            entry = data
-        if "x" in entry and "y" in entry:
-            robot_pos["x"] = float(entry["x"])
-            robot_pos["y"] = float(entry["y"])
-            print(robot_pos["x"], robot_pos["y"])
-    except (json.JSONDecodeError, KeyError, ValueError):
+        entry = data.get(ROBOT_ID)
+        if entry:
+            robot_pos["x"] = float(entry["position"][0])
+            robot_pos["y"] = float(entry["position"][1])
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError):
         pass
 
 
