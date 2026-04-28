@@ -13,11 +13,14 @@ PORT = 1883
 ROBOT_ID = 32
 ZONES_URL = f"http://{BROKER}:3000/danger_zones.json"
 
-WORKSPACE_X = (0.0, 2.0)
-WORKSPACE_Y = (0.0, 1.0)
-BOUNDARY_MARGIN = 0.15
+WORKSPACE_X = (0.1, 1.9)
+WORKSPACE_Y = (0.1, 0.9)
+BOUNDARY_MARGIN = 0.10
 ZONE_MARGIN = 0.08
 LOOKAHEAD = 0.20
+DIFF_PIVOT = math.radians(50)
+DIFF_DEAD = math.radians(10)
+RECOVER_DIFF_TOLERANCE = math.radians(20)
 
 FORWARD_SPEED = 600
 STEER_DELTA = 350
@@ -254,51 +257,79 @@ try:
 
             cx = 0.5 * (WORKSPACE_X[0] + WORKSPACE_X[1])
             cy = 0.5 * (WORKSPACE_Y[0] + WORKSPACE_Y[1])
-            desired_x = 0.0
-            desired_y = 0.0
-            reasons = []
 
-            wall_now = near_boundary(x, y)
-            wall_ahead = near_boundary(ahead_x, ahead_y)
-            if wall_now or wall_ahead:
-                dx, dy = cx - x, cy - y
-                norm = math.hypot(dx, dy) or 1.0
-                weight = 2.5 if wall_now else 1.0
-                desired_x += dx / norm * weight
-                desired_y += dy / norm * weight
-                reasons.append("wall!" if wall_now else "wall")
-
+            out_of_bounds = (
+                x < WORKSPACE_X[0] or x > WORKSPACE_X[1]
+                or y < WORKSPACE_Y[0] or y > WORKSPACE_Y[1]
+            )
             zone_now = point_in_any_zone(x, y, zones, 0.0)
-            zone_ahead_check = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
-            if zone_now or zone_ahead_check:
-                dx, dy = cx - x, cy - y
-                norm = math.hypot(dx, dy) or 1.0
-                weight = 2.5 if zone_now else 1.0
-                desired_x += dx / norm * weight
-                desired_y += dy / norm * weight
-                reasons.append("Z!" if zone_now else "z")
 
-            for rid, ox, oy in fresh_other_robots():
-                d_now = math.hypot(x - ox, y - oy)
-                d_ahead = math.hypot(ahead_x - ox, ahead_y - oy)
-                if d_now < OTHER_ROBOT_MARGIN or d_ahead < OTHER_ROBOT_LOOKAHEAD_MARGIN:
-                    dx, dy = x - ox, y - oy
-                    norm = math.hypot(dx, dy) or 1.0
-                    weight = max(1.0, OTHER_ROBOT_MARGIN / max(d_now, 0.05))
-                    desired_x += dx / norm * weight
-                    desired_y += dy / norm * weight
-                    reasons.append(f"#{rid}@{d_now:.2f}")
-
-            if reasons:
-                if math.hypot(desired_x, desired_y) < 1e-3:
-                    desired_x, desired_y = cx - x, cy - y
-                target = math.atan2(desired_y, desired_x)
-                diff = (target - theta + math.pi) % (2 * math.pi) - math.pi
-                steer = (1 if diff > 0 else -1) * STEER_DELTA
-                forward = FORWARD_SPEED
-                override = "/".join(reasons[:3])
+            if out_of_bounds or zone_now:
+                diff = heading_to_center(x, y, theta)
+                sign = 1 if diff > 0 else -1
+                if abs(diff) > RECOVER_DIFF_TOLERANCE:
+                    forward = 0
+                    steer = sign * HARD_PIVOT_SPEED
+                    override = f"RECOVER-pivot ({'oob' if out_of_bounds else 'Z!'} diff={math.degrees(diff):+.0f}°)"
+                else:
+                    forward = FORWARD_SPEED
+                    steer = 0
+                    override = f"RECOVER-drive ({'oob' if out_of_bounds else 'Z!'})"
                 walk_state = "STRAIGHT"
                 walk_state_until = now + random.uniform(2.0, 4.5)
+            else:
+                desired_x = 0.0
+                desired_y = 0.0
+                reasons = []
+
+                wall_ahead = near_boundary(ahead_x, ahead_y)
+                wall_close = near_boundary(x, y)
+                if wall_close or wall_ahead:
+                    dx, dy = cx - x, cy - y
+                    norm = math.hypot(dx, dy) or 1.0
+                    weight = 2.5 if wall_close else 1.0
+                    desired_x += dx / norm * weight
+                    desired_y += dy / norm * weight
+                    reasons.append("wall" if wall_close else "wall_ahead")
+
+                zone_ahead_check = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
+                if zone_ahead_check:
+                    dx, dy = cx - x, cy - y
+                    norm = math.hypot(dx, dy) or 1.0
+                    desired_x += dx / norm
+                    desired_y += dy / norm
+                    reasons.append("z")
+
+                for rid, ox, oy in fresh_other_robots():
+                    d_now = math.hypot(x - ox, y - oy)
+                    d_ahead = math.hypot(ahead_x - ox, ahead_y - oy)
+                    if d_now < OTHER_ROBOT_MARGIN or d_ahead < OTHER_ROBOT_LOOKAHEAD_MARGIN:
+                        dx, dy = x - ox, y - oy
+                        norm = math.hypot(dx, dy) or 1.0
+                        weight = max(1.0, OTHER_ROBOT_MARGIN / max(d_now, 0.05))
+                        desired_x += dx / norm * weight
+                        desired_y += dy / norm * weight
+                        reasons.append(f"#{rid}@{d_now:.2f}")
+
+                if reasons:
+                    if math.hypot(desired_x, desired_y) < 1e-3:
+                        desired_x, desired_y = cx - x, cy - y
+                    target = math.atan2(desired_y, desired_x)
+                    diff = (target - theta + math.pi) % (2 * math.pi) - math.pi
+                    sign = 1 if diff > 0 else -1
+                    abs_diff = abs(diff)
+                    if abs_diff > DIFF_PIVOT:
+                        forward = 0
+                        steer = sign * HARD_PIVOT_SPEED
+                    elif abs_diff > DIFF_DEAD:
+                        forward = FORWARD_SPEED
+                        steer = int(sign * STEER_DELTA * (abs_diff / DIFF_PIVOT))
+                    else:
+                        forward = FORWARD_SPEED
+                        steer = 0
+                    override = "/".join(reasons[:3])
+                    walk_state = "STRAIGHT"
+                    walk_state_until = now + random.uniform(2.0, 4.5)
 
         if now - last_log >= LOG_INTERVAL:
             last_log = now
