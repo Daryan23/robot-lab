@@ -22,18 +22,21 @@ DIFF_PIVOT = math.radians(50)
 DIFF_DEAD = math.radians(10)
 RECOVER_DIFF_TOLERANCE = math.radians(20)
 
-FORWARD_SPEED = 600
-STEER_DELTA = 350
-HARD_PIVOT_SPEED = 450
+FORWARD_SPEED = 400
+RECOVER_FORWARD = 200
+STEER_DELTA = 250
+HARD_PIVOT_SPEED = 300
 IR_SOFT = 600
 IR_HARD = 1500
-POSE_TIMEOUT = 5.0
+POSE_TIMEOUT = 1.5
 OTHER_ROBOT_MARGIN = 0.18
 OTHER_ROBOT_LOOKAHEAD_MARGIN = 0.15
 OTHER_ROBOT_TIMEOUT = 3.0
 TICK = 0.05
 RUN_DURATION = 60.0
 LOG_INTERVAL = 0.5
+STUCK_DISTANCE = 0.05
+STUCK_TIME = 3.0
 
 pose_lock = threading.Lock()
 latest_pose = {"x": None, "y": None, "theta": None, "in_danger": False, "t": 0.0}
@@ -212,6 +215,13 @@ walk_state_until = start + random.uniform(2.0, 4.5)
 walk_turn_steer = 0
 last_log = 0.0
 
+stuck_check_pos = None
+stuck_check_time = start
+
+recover_phase = None
+recover_target_theta = 0.0
+recover_phase_until = 0.0
+
 try:
     while time.time() - start < RUN_DURATION:
         now = time.time()
@@ -258,26 +268,63 @@ try:
             cx = 0.5 * (WORKSPACE_X[0] + WORKSPACE_X[1])
             cy = 0.5 * (WORKSPACE_Y[0] + WORKSPACE_Y[1])
 
+            if stuck_check_pos is None:
+                stuck_check_pos = (x, y)
+                stuck_check_time = now
+            elif math.hypot(x - stuck_check_pos[0], y - stuck_check_pos[1]) > STUCK_DISTANCE:
+                stuck_check_pos = (x, y)
+                stuck_check_time = now
+
+            if now - stuck_check_time > STUCK_TIME:
+                print(f"[{now-start:5.1f}s] STUCK at ({x:.2f},{y:.2f}) — back-up + random turn")
+                drive(pipuck, -RECOVER_FORWARD, 0)
+                time.sleep(0.4)
+                drive(pipuck, 0, random.choice((-1, 1)) * HARD_PIVOT_SPEED)
+                time.sleep(0.7)
+                stuck_check_pos = None
+                stuck_check_time = time.time()
+                recover_phase = None
+                walk_state = "STRAIGHT"
+                walk_state_until = time.time() + random.uniform(2.0, 4.5)
+                continue
+
             out_of_bounds = (
                 x < WORKSPACE_X[0] or x > WORKSPACE_X[1]
                 or y < WORKSPACE_Y[0] or y > WORKSPACE_Y[1]
             )
             zone_now = point_in_any_zone(x, y, zones, 0.0)
 
-            if out_of_bounds or zone_now:
-                diff = heading_to_center(x, y, theta)
-                sign = 1 if diff > 0 else -1
-                if abs(diff) > RECOVER_DIFF_TOLERANCE:
+            if (out_of_bounds or zone_now) and recover_phase is None:
+                recover_target_theta = math.atan2(cy - y, cx - x)
+                recover_phase = "PIVOT"
+                recover_phase_until = now + 2.5
+
+            if recover_phase == "PIVOT":
+                diff = (recover_target_theta - theta + math.pi) % (2 * math.pi) - math.pi
+                if abs(diff) < math.radians(15) or now >= recover_phase_until:
+                    recover_phase = "DRIVE"
+                    recover_phase_until = now + 1.5
+                    forward = RECOVER_FORWARD
+                    steer = 0
+                    override = f"RECOVER-drive ({'oob' if out_of_bounds else 'Z!'})"
+                else:
+                    sign = 1 if diff > 0 else -1
                     forward = 0
                     steer = sign * HARD_PIVOT_SPEED
                     override = f"RECOVER-pivot ({'oob' if out_of_bounds else 'Z!'} diff={math.degrees(diff):+.0f}°)"
-                else:
-                    forward = FORWARD_SPEED
-                    steer = 0
-                    override = f"RECOVER-drive ({'oob' if out_of_bounds else 'Z!'})"
                 walk_state = "STRAIGHT"
                 walk_state_until = now + random.uniform(2.0, 4.5)
-            else:
+            elif recover_phase == "DRIVE":
+                if now >= recover_phase_until or (not out_of_bounds and not zone_now):
+                    recover_phase = None
+                else:
+                    forward = RECOVER_FORWARD
+                    steer = 0
+                    override = f"RECOVER-drive ({'oob' if out_of_bounds else 'Z!'})"
+                    walk_state = "STRAIGHT"
+                    walk_state_until = now + random.uniform(2.0, 4.5)
+
+            if recover_phase is None:
                 desired_x = 0.0
                 desired_y = 0.0
                 reasons = []
