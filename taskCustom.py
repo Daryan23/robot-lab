@@ -18,17 +18,14 @@ X_MIN, X_MAX = 0.1, 1.9
 Y_MIN, Y_MAX = 0.1, 0.9
 CENTER = (0.5 * (X_MIN + X_MAX), 0.5 * (Y_MIN + Y_MAX))
 
-BOUNDARY_MARGIN = 0.15
 ZONE_MARGIN = 0.10
-OTHER_MARGIN = 0.22
-LOOKAHEAD = 0.22
+OTHER_MARGIN = 0.40
+LOOKAHEAD = 0.30
 
-FORWARD_SPEED = 400
-PIVOT_SPEED = 350
-STEER_DELTA = 220
-
-PIVOT_THRESHOLD = math.radians(45)
-STEER_DEAD = math.radians(10)
+FORWARD_SPEED = 750
+WANDER_STEER = 320
+MAX_STEER = 750
+TURN_INTENSITY_FULL = math.radians(60)
 
 TICK = 0.05
 POSE_TIMEOUT = 1.5
@@ -37,6 +34,8 @@ LOG_INTERVAL = 0.5
 
 STRAIGHT_MIN, STRAIGHT_MAX = 2.0, 4.5
 TURN_MIN, TURN_MAX = 0.4, 1.0
+
+RECOVER_DRIVE_TIME = 2.0
 
 
 pose_lock = threading.Lock()
@@ -174,16 +173,16 @@ def drive(pipuck, forward, steer):
     pipuck.epuck.set_motor_speeds(left, right)
 
 
-def compute_avoid_vector(x, y, zones):
+def steer_toward(target, theta, max_steer=MAX_STEER):
+    diff = angle_diff(target, theta)
+    sign = 1 if diff >= 0 else -1
+    intensity = min(1.0, abs(diff) / TURN_INTENSITY_FULL)
+    return int(sign * max_steer * intensity)
+
+
+def compute_avoid_vector(x, y, theta, zones):
     vx, vy = 0.0, 0.0
     reasons = []
-
-    if out_of_bounds(x, y, BOUNDARY_MARGIN):
-        dx, dy = CENTER[0] - x, CENTER[1] - y
-        n = math.hypot(dx, dy) or 1.0
-        vx += 2.0 * dx / n
-        vy += 2.0 * dy / n
-        reasons.append("wall")
 
     if hits_zone(x, y, zones, ZONE_MARGIN):
         dx, dy = CENTER[0] - x, CENTER[1] - y
@@ -192,14 +191,21 @@ def compute_avoid_vector(x, y, zones):
         vy += dy / n
         reasons.append("zone")
 
+    hx, hy = math.cos(theta), math.sin(theta)
     for rid, ox, oy in fresh_others():
         d = math.hypot(x - ox, y - oy)
         if d < OTHER_MARGIN:
-            dx, dy = x - ox, y - oy
+            rx, ry = x - ox, y - oy
             n = d or 1.0
+            rx, ry = rx / n, ry / n
+            t1 = (-ry, rx)
+            t2 = (ry, -rx)
+            tx, ty = t1 if (t1[0] * hx + t1[1] * hy) >= (t2[0] * hx + t2[1] * hy) else t2
+            repel_w = max(0.0, min(1.0, (OTHER_MARGIN - d) / OTHER_MARGIN))
+            tang_w = 1.0 - repel_w
             weight = max(1.0, OTHER_MARGIN / max(d, 0.05))
-            vx += weight * dx / n
-            vy += weight * dy / n
+            vx += weight * (repel_w * rx + tang_w * tx)
+            vy += weight * (repel_w * ry + tang_w * ty)
             reasons.append(f"#{rid}@{d:.2f}")
 
     if not reasons:
@@ -223,8 +229,10 @@ pipuck = PiPuck(epuck_version=2)
 start = time.time()
 walk_state = "STRAIGHT"
 walk_until = start + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
-turn_steer = PIVOT_SPEED
+turn_steer = WANDER_STEER
 last_log = 0.0
+
+recovery_until = 0.0
 
 print("random walk started — Ctrl-C to stop")
 
@@ -234,10 +242,10 @@ try:
         pose = get_pose()
 
         if pose is None:
-            drive(pipuck, 0, 0)
+            drive(pipuck, FORWARD_SPEED // 2, 0)
             if now - last_log >= LOG_INTERVAL:
                 last_log = now
-                print(f"[{now-start:6.1f}s] no fresh pose, waiting…")
+                print(f"[{now-start:6.1f}s] no fresh pose, crawling forward…")
             time.sleep(TICK)
             continue
 
@@ -245,41 +253,57 @@ try:
         ahead_x = x + LOOKAHEAD * math.cos(theta)
         ahead_y = y + LOOKAHEAD * math.sin(theta)
 
-        avoid = compute_avoid_vector(x, y, zones) or compute_avoid_vector(ahead_x, ahead_y, zones)
+        forward = FORWARD_SPEED
+        steer = 0
+        mode = ""
 
-        if avoid is not None:
-            vx, vy, reasons = avoid
-            target = math.atan2(vy, vx)
-            diff = angle_diff(target, theta)
-            sign = 1 if diff > 0 else -1
-            abs_diff = abs(diff)
-            if abs_diff > PIVOT_THRESHOLD:
-                forward = 0
-                steer = sign * PIVOT_SPEED
-            elif abs_diff > STEER_DEAD:
-                forward = FORWARD_SPEED
-                steer = int(sign * STEER_DELTA * (abs_diff / PIVOT_THRESHOLD))
+        if now >= recovery_until and (
+            out_of_bounds(x, y, 0.0) or out_of_bounds(ahead_x, ahead_y, 0.0)
+        ):
+            recovery_until = now + RECOVER_DRIVE_TIME
+
+        if now < recovery_until:
+            gx, gy = CENTER[0] - x, CENTER[1] - y
+            gn = math.hypot(gx, gy) or 1.0
+            gx, gy = gx / gn, gy / gn
+            avoid = compute_avoid_vector(x, y, theta, zones)
+            if avoid is not None:
+                ax, ay, reasons = avoid
+                tx, ty = gx + ax, gy + ay
+                mode = f"RECOVER+AVOID({recovery_until - now:.1f}s,{','.join(reasons[:2])})"
             else:
-                forward = FORWARD_SPEED
-                steer = 0
-            mode = "AVOID(" + "/".join(reasons[:3]) + ")"
+                tx, ty = gx, gy
+                mode = f"RECOVER({recovery_until - now:.1f}s)"
+            target = math.atan2(ty, tx)
+            steer = steer_toward(target, theta)
             walk_state = "STRAIGHT"
             walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
         else:
-            if walk_state == "STRAIGHT":
-                forward = FORWARD_SPEED
-                steer = 0
-                if now >= walk_until:
-                    walk_state = "TURN"
-                    turn_steer = random.choice((-1, 1)) * PIVOT_SPEED
-                    walk_until = now + random.uniform(TURN_MIN, TURN_MAX)
+            avoid = (
+                compute_avoid_vector(x, y, theta, zones)
+                or compute_avoid_vector(ahead_x, ahead_y, theta, zones)
+            )
+
+            if avoid is not None:
+                vx, vy, reasons = avoid
+                target = math.atan2(vy, vx)
+                steer = steer_toward(target, theta)
+                mode = "AVOID(" + "/".join(reasons[:3]) + ")"
+                walk_state = "STRAIGHT"
+                walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
             else:
-                forward = 0
-                steer = turn_steer
-                if now >= walk_until:
-                    walk_state = "STRAIGHT"
-                    walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
-            mode = walk_state
+                if walk_state == "STRAIGHT":
+                    steer = 0
+                    if now >= walk_until:
+                        walk_state = "TURN"
+                        turn_steer = random.choice((-1, 1)) * WANDER_STEER
+                        walk_until = now + random.uniform(TURN_MIN, TURN_MAX)
+                else:
+                    steer = turn_steer
+                    if now >= walk_until:
+                        walk_state = "STRAIGHT"
+                        walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
+                mode = walk_state
 
         drive(pipuck, forward, steer)
 
