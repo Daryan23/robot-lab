@@ -1,18 +1,23 @@
-import paho.mqtt.client as mqtt
 import json
 import math
 import random
 import threading
 import time
+import urllib.request
+
+import paho.mqtt.client as mqtt
 from pipuck.pipuck import PiPuck
 
 BROKER = "192.168.178.43"
 PORT = 1883
 ROBOT_ID = 32
+ZONES_URL = f"http://{BROKER}:3000/danger_zones.json"
 
 WORKSPACE_X = (0.0, 2.0)
 WORKSPACE_Y = (0.0, 1.0)
 BOUNDARY_MARGIN = 0.15
+ZONE_MARGIN = 0.08
+LOOKAHEAD = 0.20
 
 FORWARD_SPEED = 600
 TURN_SPEED = 400
@@ -22,22 +27,64 @@ TICK = 0.05
 RUN_DURATION = 60.0
 
 pose_lock = threading.Lock()
-latest_pose = {"x": None, "y": None, "theta": None, "t": 0.0}
+latest_pose = {"x": None, "y": None, "theta": None, "in_danger": False, "t": 0.0}
 
 
-def extract_pose(payload, robot_id):
-    if isinstance(payload, list):
-        for entry in payload:
-            if isinstance(entry, dict) and entry.get("id") == robot_id:
-                return entry
-        return None
-    if isinstance(payload, dict):
-        if payload.get("id") == robot_id:
-            return payload
-        keyed = payload.get(str(robot_id)) or payload.get(robot_id)
-        if isinstance(keyed, dict):
-            return keyed
-    return None
+def load_zones():
+    try:
+        with urllib.request.urlopen(ZONES_URL, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        zones = data.get("zones", [])
+        print(f"loaded {len(zones)} danger zone(s)")
+        return zones
+    except Exception as exc:
+        print(f"could not load danger zones ({exc}); continuing without them")
+        return []
+
+
+def point_in_circle(x, y, zone, margin):
+    dx = x - zone["center"]["x"]
+    dy = y - zone["center"]["y"]
+    return math.hypot(dx, dy) <= zone["radius"] + margin
+
+
+def point_in_polygon(x, y, zone, margin):
+    pts = zone["points"]
+    inside = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]["x"], pts[i]["y"]
+        xj, yj = pts[j]["x"], pts[j]["y"]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
+            inside = not inside
+        j = i
+    if inside:
+        return True
+    if margin <= 0:
+        return False
+    min_d2 = float("inf")
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]["x"], pts[i]["y"]
+        xj, yj = pts[j]["x"], pts[j]["y"]
+        ex, ey = xi - xj, yi - yj
+        seg_len2 = ex * ex + ey * ey
+        t = 0.0 if seg_len2 == 0 else max(0.0, min(1.0, ((x - xj) * ex + (y - yj) * ey) / seg_len2))
+        px, py = xj + t * ex, yj + t * ey
+        d2 = (x - px) ** 2 + (y - py) ** 2
+        if d2 < min_d2:
+            min_d2 = d2
+        j = i
+    return min_d2 <= margin * margin
+
+
+def point_in_any_zone(x, y, zones, margin):
+    for z in zones:
+        if z.get("type") == "circle" and point_in_circle(x, y, z, margin):
+            return True
+        if z.get("type") == "polygon" and point_in_polygon(x, y, z, margin):
+            return True
+    return False
 
 
 def on_connect(client, userdata, flags, rc):
@@ -45,41 +92,35 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("robot_pos/all")
 
 
-_debug_msgs_logged = 0
-
-
 def on_message(client, userdata, msg):
-    global _debug_msgs_logged
     try:
         data = json.loads(msg.payload.decode())
     except json.JSONDecodeError:
-        print(f"invalid json: {msg.payload}")
         return
-    if _debug_msgs_logged < 3:
-        print(f"[debug] raw payload: {data!r}")
-        _debug_msgs_logged += 1
-    pose = extract_pose(data, ROBOT_ID)
-    if pose is None:
-        if _debug_msgs_logged <= 3:
-            print(f"[debug] extract_pose returned None for ID {ROBOT_ID}")
+    if not isinstance(data, dict):
+        return
+    entry = data.get(str(ROBOT_ID)) or data.get(ROBOT_ID)
+    if not isinstance(entry, dict):
+        return
+    pos = entry.get("position")
+    if not (isinstance(pos, (list, tuple)) and len(pos) >= 2):
         return
     try:
-        x = float(pose["x"])
-        y = float(pose["y"])
-        theta = float(pose.get("theta", pose.get("yaw", 0.0)))
-    except (KeyError, TypeError, ValueError):
+        x = float(pos[0])
+        y = float(pos[1])
+        theta = math.radians(float(entry.get("angle", 0.0)))
+    except (TypeError, ValueError):
         return
+    in_danger = bool(entry.get("in_danger", False))
     with pose_lock:
-        latest_pose.update(x=x, y=y, theta=theta, t=time.time())
+        latest_pose.update(x=x, y=y, theta=theta, in_danger=in_danger, t=time.time())
 
 
 def get_pose():
     with pose_lock:
-        if latest_pose["x"] is None:
+        if latest_pose["x"] is None or time.time() - latest_pose["t"] > POSE_TIMEOUT:
             return None
-        if time.time() - latest_pose["t"] > POSE_TIMEOUT:
-            return None
-        return latest_pose["x"], latest_pose["y"], latest_pose["theta"]
+        return (latest_pose["x"], latest_pose["y"], latest_pose["theta"], latest_pose["in_danger"])
 
 
 def near_boundary(x, y):
@@ -97,18 +138,18 @@ def heading_to_center(x, y, theta):
     cx = 0.5 * (WORKSPACE_X[0] + WORKSPACE_X[1])
     cy = 0.5 * (WORKSPACE_Y[0] + WORKSPACE_Y[1])
     target = math.atan2(cy - y, cx - x)
-    diff = (target - theta + math.pi) % (2 * math.pi) - math.pi
-    return diff
+    return (target - theta + math.pi) % (2 * math.pi) - math.pi
 
 
 def front_obstacle(ir):
-    # Sensors 0 and 7 face forward; 1 and 6 are front-diagonals.
     return ir[0] > IR_THRESHOLD or ir[7] > IR_THRESHOLD
 
 
 def turn_direction_for_obstacle(ir):
     return -1 if (ir[0] + ir[1]) > (ir[7] + ir[6]) else 1
 
+
+zones = load_zones()
 
 client = mqtt.Client()
 client.on_connect = on_connect
@@ -143,10 +184,25 @@ try:
             time.sleep(0.2)
             continue
 
-        x, y, theta = pose
+        x, y, theta, in_danger = pose
+
+        if in_danger:
+            diff = heading_to_center(x, y, theta)
+            sign = 1 if diff > 0 else -1
+            pipuck.epuck.set_motor_speeds(-FORWARD_SPEED, -FORWARD_SPEED)
+            time.sleep(0.4)
+            pipuck.epuck.set_motor_speeds(sign * TURN_SPEED, -sign * TURN_SPEED)
+            time.sleep(random.uniform(0.6, 1.2))
+            state = "FORWARD"
+            state_until = time.time() + random.uniform(1.5, 3.0)
+            continue
+
+        ahead_x = x + LOOKAHEAD * math.cos(theta)
+        ahead_y = y + LOOKAHEAD * math.sin(theta)
+        zone_ahead = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
 
         if state == "FORWARD":
-            if near_boundary(x, y):
+            if near_boundary(x, y) or zone_ahead:
                 diff = heading_to_center(x, y, theta)
                 turn_sign = 1 if diff > 0 else -1
                 state = "TURN"
