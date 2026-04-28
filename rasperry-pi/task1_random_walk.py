@@ -33,6 +33,7 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
+        print(data)
         # Expected format: {"x": 0.3, "y": -0.1, ...} or a list of robots.
         # If the topic publishes a list, find this robot by id if available.
         if isinstance(data, list):
