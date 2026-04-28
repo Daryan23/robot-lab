@@ -25,7 +25,8 @@ HARD_PIVOT_SPEED = 450
 IR_SOFT = 600
 IR_HARD = 1500
 POSE_TIMEOUT = 5.0
-OTHER_ROBOT_MARGIN = 0.12
+OTHER_ROBOT_MARGIN = 0.18
+OTHER_ROBOT_LOOKAHEAD_MARGIN = 0.15
 OTHER_ROBOT_TIMEOUT = 3.0
 TICK = 0.05
 RUN_DURATION = 60.0
@@ -246,35 +247,56 @@ try:
         pose = get_pose()
         nearest = None
         if pose is not None:
-            x, y, theta, in_danger = pose
+            x, y, theta, _ = pose
             ahead_x = x + LOOKAHEAD * math.cos(theta)
             ahead_y = y + LOOKAHEAD * math.sin(theta)
             nearest = nearest_other(x, y)
 
-            if in_danger:
-                diff = heading_to_center(x, y, theta)
-                steer = (1 if diff > 0 else -1) * STEER_DELTA
-                forward = FORWARD_SPEED // 2
-                override = "in_danger"
-            elif near_boundary(x, y) or near_boundary(ahead_x, ahead_y):
-                diff = heading_to_center(x, y, theta)
-                steer = (1 if diff > 0 else -1) * STEER_DELTA
-                forward = FORWARD_SPEED // 2
-                override = f"wall (x={x:.2f},y={y:.2f})"
-            elif point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN):
-                diff = heading_to_center(x, y, theta)
-                steer = (1 if diff > 0 else -1) * STEER_DELTA
-                forward = FORWARD_SPEED // 2
-                override = "zone_ahead"
-            elif nearest is not None and nearest[3] < OTHER_ROBOT_MARGIN:
-                _, ox, oy, d = nearest
-                away = math.atan2(y - oy, x - ox)
-                diff = (away - theta + math.pi) % (2 * math.pi) - math.pi
-                steer = (1 if diff > 0 else -1) * STEER_DELTA
-                forward = FORWARD_SPEED // 2
-                override = f"other(#{nearest[0]} d={d:.2f})"
+            cx = 0.5 * (WORKSPACE_X[0] + WORKSPACE_X[1])
+            cy = 0.5 * (WORKSPACE_Y[0] + WORKSPACE_Y[1])
+            desired_x = 0.0
+            desired_y = 0.0
+            reasons = []
 
-            if override and override not in (f"ir_soft({ir_front})",):
+            wall_now = near_boundary(x, y)
+            wall_ahead = near_boundary(ahead_x, ahead_y)
+            if wall_now or wall_ahead:
+                dx, dy = cx - x, cy - y
+                norm = math.hypot(dx, dy) or 1.0
+                weight = 2.5 if wall_now else 1.0
+                desired_x += dx / norm * weight
+                desired_y += dy / norm * weight
+                reasons.append("wall!" if wall_now else "wall")
+
+            zone_now = point_in_any_zone(x, y, zones, 0.0)
+            zone_ahead_check = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
+            if zone_now or zone_ahead_check:
+                dx, dy = cx - x, cy - y
+                norm = math.hypot(dx, dy) or 1.0
+                weight = 2.5 if zone_now else 1.0
+                desired_x += dx / norm * weight
+                desired_y += dy / norm * weight
+                reasons.append("Z!" if zone_now else "z")
+
+            for rid, ox, oy in fresh_other_robots():
+                d_now = math.hypot(x - ox, y - oy)
+                d_ahead = math.hypot(ahead_x - ox, ahead_y - oy)
+                if d_now < OTHER_ROBOT_MARGIN or d_ahead < OTHER_ROBOT_LOOKAHEAD_MARGIN:
+                    dx, dy = x - ox, y - oy
+                    norm = math.hypot(dx, dy) or 1.0
+                    weight = max(1.0, OTHER_ROBOT_MARGIN / max(d_now, 0.05))
+                    desired_x += dx / norm * weight
+                    desired_y += dy / norm * weight
+                    reasons.append(f"#{rid}@{d_now:.2f}")
+
+            if reasons:
+                if math.hypot(desired_x, desired_y) < 1e-3:
+                    desired_x, desired_y = cx - x, cy - y
+                target = math.atan2(desired_y, desired_x)
+                diff = (target - theta + math.pi) % (2 * math.pi) - math.pi
+                steer = (1 if diff > 0 else -1) * STEER_DELTA
+                forward = FORWARD_SPEED
+                override = "/".join(reasons[:3])
                 walk_state = "STRAIGHT"
                 walk_state_until = now + random.uniform(2.0, 4.5)
 
@@ -284,9 +306,14 @@ try:
                 x, y, theta, _ = pose
                 theta_deg = math.degrees(theta) % 360
                 near_str = f"#{nearest[0]}@{nearest[3]:.2f}m" if nearest else "none"
+                in_zone = point_in_any_zone(x, y, zones, 0.0)
+                ahead_x = x + LOOKAHEAD * math.cos(theta)
+                ahead_y = y + LOOKAHEAD * math.sin(theta)
+                zone_ahead_now = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
+                zone_flag = "Z!" if in_zone else ("z" if zone_ahead_now else "-")
                 print(
                     f"[{now-start:5.1f}s] pos=({x:.2f},{y:.2f}) θ={theta_deg:5.1f}° "
-                    f"state={walk_state} ir_f={ir_front} other={near_str} "
+                    f"state={walk_state} ir_f={ir_front} other={near_str} zone={zone_flag} "
                     f"override={override or '-'} fwd={forward} steer={steer:+d}"
                 )
             else:

@@ -1,0 +1,400 @@
+{
+  "directed": false,
+  "multigraph": false,
+  "graph": {},
+  "nodes": [
+    {
+      "label": "client.py",
+      "file_type": "code",
+      "source_file": "rasperry-pi/client.py",
+      "source_location": "L1",
+      "id": "rasperry_pi_client_py",
+      "community": 1,
+      "norm_label": "client.py"
+    },
+    {
+      "label": "on_connect()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/client.py",
+      "source_location": "L11",
+      "id": "client_on_connect",
+      "community": 1,
+      "norm_label": "on_connect()"
+    },
+    {
+      "label": "on_message()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/client.py",
+      "source_location": "L16",
+      "id": "client_on_message",
+      "community": 1,
+      "norm_label": "on_message()"
+    },
+    {
+      "label": "task1_random_walk.py",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L1",
+      "id": "rasperry_pi_task1_random_walk_py",
+      "community": 0,
+      "norm_label": "task1_random_walk.py"
+    },
+    {
+      "label": "load_zones()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L41",
+      "id": "task1_random_walk_load_zones",
+      "community": 0,
+      "norm_label": "load_zones()"
+    },
+    {
+      "label": "point_in_circle()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L53",
+      "id": "task1_random_walk_point_in_circle",
+      "community": 2,
+      "norm_label": "point_in_circle()"
+    },
+    {
+      "label": "point_in_polygon()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L59",
+      "id": "task1_random_walk_point_in_polygon",
+      "community": 2,
+      "norm_label": "point_in_polygon()"
+    },
+    {
+      "label": "point_in_any_zone()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L89",
+      "id": "task1_random_walk_point_in_any_zone",
+      "community": 2,
+      "norm_label": "point_in_any_zone()"
+    },
+    {
+      "label": "on_connect()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L98",
+      "id": "task1_random_walk_on_connect",
+      "community": 0,
+      "norm_label": "on_connect()"
+    },
+    {
+      "label": "on_message()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L103",
+      "id": "task1_random_walk_on_message",
+      "community": 0,
+      "norm_label": "on_message()"
+    },
+    {
+      "label": "fresh_other_robots()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L139",
+      "id": "task1_random_walk_fresh_other_robots",
+      "community": 3,
+      "norm_label": "fresh_other_robots()"
+    },
+    {
+      "label": "nearest_other()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L145",
+      "id": "task1_random_walk_nearest_other",
+      "community": 3,
+      "norm_label": "nearest_other()"
+    },
+    {
+      "label": "get_pose()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L156",
+      "id": "task1_random_walk_get_pose",
+      "community": 0,
+      "norm_label": "get_pose()"
+    },
+    {
+      "label": "near_boundary()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L163",
+      "id": "task1_random_walk_near_boundary",
+      "community": 0,
+      "norm_label": "near_boundary()"
+    },
+    {
+      "label": "heading_to_center()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L174",
+      "id": "task1_random_walk_heading_to_center",
+      "community": 0,
+      "norm_label": "heading_to_center()"
+    },
+    {
+      "label": "ir_front_max()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L181",
+      "id": "task1_random_walk_ir_front_max",
+      "community": 0,
+      "norm_label": "ir_front_max()"
+    },
+    {
+      "label": "ir_turn_sign()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L185",
+      "id": "task1_random_walk_ir_turn_sign",
+      "community": 0,
+      "norm_label": "ir_turn_sign()"
+    },
+    {
+      "label": "drive()",
+      "file_type": "code",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L189",
+      "id": "task1_random_walk_drive",
+      "community": 0,
+      "norm_label": "drive()"
+    }
+  ],
+  "links": [
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/client.py",
+      "source_location": "L11",
+      "weight": 1.0,
+      "_src": "rasperry_pi_client_py",
+      "_tgt": "client_on_connect",
+      "source": "rasperry_pi_client_py",
+      "target": "client_on_connect",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/client.py",
+      "source_location": "L16",
+      "weight": 1.0,
+      "_src": "rasperry_pi_client_py",
+      "_tgt": "client_on_message",
+      "source": "rasperry_pi_client_py",
+      "target": "client_on_message",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L41",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_load_zones",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_load_zones",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L53",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_point_in_circle",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_point_in_circle",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L59",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_point_in_polygon",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_point_in_polygon",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L89",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_point_in_any_zone",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_point_in_any_zone",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L98",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_on_connect",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_on_connect",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L103",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_on_message",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_on_message",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L139",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_fresh_other_robots",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_fresh_other_robots",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L145",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_nearest_other",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_nearest_other",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L156",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_get_pose",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_get_pose",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L163",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_near_boundary",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_near_boundary",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L174",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_heading_to_center",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_heading_to_center",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L181",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_ir_front_max",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_ir_front_max",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L185",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_ir_turn_sign",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_ir_turn_sign",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "contains",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L189",
+      "weight": 1.0,
+      "_src": "rasperry_pi_task1_random_walk_py",
+      "_tgt": "task1_random_walk_drive",
+      "source": "rasperry_pi_task1_random_walk_py",
+      "target": "task1_random_walk_drive",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L91",
+      "weight": 1.0,
+      "_src": "task1_random_walk_point_in_any_zone",
+      "_tgt": "task1_random_walk_point_in_circle",
+      "source": "task1_random_walk_point_in_circle",
+      "target": "task1_random_walk_point_in_any_zone",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L93",
+      "weight": 1.0,
+      "_src": "task1_random_walk_point_in_any_zone",
+      "_tgt": "task1_random_walk_point_in_polygon",
+      "source": "task1_random_walk_point_in_polygon",
+      "target": "task1_random_walk_point_in_any_zone",
+      "confidence_score": 1.0
+    },
+    {
+      "relation": "calls",
+      "confidence": "EXTRACTED",
+      "source_file": "rasperry-pi/task1_random_walk.py",
+      "source_location": "L148",
+      "weight": 1.0,
+      "_src": "task1_random_walk_nearest_other",
+      "_tgt": "task1_random_walk_fresh_other_robots",
+      "source": "task1_random_walk_fresh_other_robots",
+      "target": "task1_random_walk_nearest_other",
+      "confidence_score": 1.0
+    }
+  ],
+  "hyperedges": []
+}
