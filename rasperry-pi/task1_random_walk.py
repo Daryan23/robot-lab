@@ -25,11 +25,16 @@ HARD_PIVOT_SPEED = 450
 IR_SOFT = 600
 IR_HARD = 1500
 POSE_TIMEOUT = 5.0
+OTHER_ROBOT_MARGIN = 0.05
+OTHER_ROBOT_TIMEOUT = 3.0
 TICK = 0.05
 RUN_DURATION = 60.0
 
 pose_lock = threading.Lock()
 latest_pose = {"x": None, "y": None, "theta": None, "in_danger": False, "t": 0.0}
+
+others_lock = threading.Lock()
+other_robots = {}
 
 
 def load_zones():
@@ -101,21 +106,50 @@ def on_message(client, userdata, msg):
         return
     if not isinstance(data, dict):
         return
-    entry = data.get(str(ROBOT_ID)) or data.get(ROBOT_ID)
-    if not isinstance(entry, dict):
-        return
-    pos = entry.get("position")
-    if not (isinstance(pos, (list, tuple)) and len(pos) >= 2):
-        return
-    try:
-        x = float(pos[0])
-        y = float(pos[1])
-        theta = math.radians(float(entry.get("angle", 0.0)))
-    except (TypeError, ValueError):
-        return
-    in_danger = bool(entry.get("in_danger", False))
-    with pose_lock:
-        latest_pose.update(x=x, y=y, theta=theta, in_danger=in_danger, t=time.time())
+    now_t = time.time()
+    self_key = str(ROBOT_ID)
+    others_update = {}
+    for rid, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        pos = entry.get("position")
+        if not (isinstance(pos, (list, tuple)) and len(pos) >= 2):
+            continue
+        try:
+            ox = float(pos[0])
+            oy = float(pos[1])
+        except (TypeError, ValueError):
+            continue
+        if str(rid) == self_key:
+            try:
+                theta = math.radians(float(entry.get("angle", 0.0)))
+            except (TypeError, ValueError):
+                continue
+            in_danger = bool(entry.get("in_danger", False))
+            with pose_lock:
+                latest_pose.update(x=ox, y=oy, theta=theta, in_danger=in_danger, t=now_t)
+        else:
+            others_update[str(rid)] = (ox, oy, now_t)
+    if others_update:
+        with others_lock:
+            other_robots.update(others_update)
+
+
+def fresh_other_robots():
+    cutoff = time.time() - OTHER_ROBOT_TIMEOUT
+    with others_lock:
+        return [(rid, x, y) for rid, (x, y, t) in other_robots.items() if t >= cutoff]
+
+
+def nearest_other(x, y):
+    best = None
+    best_d = float("inf")
+    for rid, ox, oy in fresh_other_robots():
+        d = math.hypot(x - ox, y - oy)
+        if d < best_d:
+            best_d = d
+            best = (rid, ox, oy, d)
+    return best
 
 
 def get_pose():
@@ -214,12 +248,21 @@ try:
                 forward = FORWARD_SPEED // 2
                 override = True
             else:
-                ahead_x = x + LOOKAHEAD * math.cos(theta)
-                ahead_y = y + LOOKAHEAD * math.sin(theta)
-                if near_boundary(x, y) or point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN):
-                    diff = heading_to_center(x, y, theta)
+                near = nearest_other(x, y)
+                if near is not None and near[3] < OTHER_ROBOT_MARGIN:
+                    _, ox, oy, _ = near
+                    away = math.atan2(y - oy, x - ox)
+                    diff = (away - theta + math.pi) % (2 * math.pi) - math.pi
                     steer = (1 if diff > 0 else -1) * STEER_DELTA
+                    forward = FORWARD_SPEED // 2
                     override = True
+                else:
+                    ahead_x = x + LOOKAHEAD * math.cos(theta)
+                    ahead_y = y + LOOKAHEAD * math.sin(theta)
+                    if near_boundary(x, y) or point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN):
+                        diff = heading_to_center(x, y, theta)
+                        steer = (1 if diff > 0 else -1) * STEER_DELTA
+                        override = True
             if override:
                 walk_state = "STRAIGHT"
                 walk_state_until = now + random.uniform(2.0, 4.5)
