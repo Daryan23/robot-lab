@@ -54,11 +54,11 @@ def main():
     mqtt_client.connect(Broker, Port, 60)
     mqtt_client.loop_start()
 
-    print("Waiting for position fix...")
-    while state["my_x"] is None or state["tgt_x"] is None:
+    print("Waiting for own position fix...")
+    while state["my_x"] is None:
         time.sleep(0.1)
-    print(f"My pos: ({state['my_x']:.2f}, {state['my_y']:.2f})")
-    print(f"Target pos: ({state['tgt_x']:.2f}, {state['tgt_y']:.2f})")
+    print(f"Got position: ({state['my_x']:.2f}, {state['my_y']:.2f})")
+    print(f"Searching for robot {TARGET_ID}...")
 
     pipuck = PiPuck(epuck_version=2)
 
@@ -67,9 +67,16 @@ def main():
             mx, my, ma = state["my_x"], state["my_y"], state["my_angle"]
             tx, ty     = state["tgt_x"], state["tgt_y"]
 
-            if None in (mx, my, ma, tx, ty):
+            if None in (mx, my, ma):
                 pipuck.epuck.set_motor_speeds(0, 0)
                 time.sleep(0.05)
+                continue
+
+            # Target not visible — spin to search
+            if tx is None or ty is None:
+                print(f"Robot {TARGET_ID} not visible, searching...")
+                pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
+                time.sleep(0.1)
                 continue
 
             dx = tx - mx
