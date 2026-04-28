@@ -21,7 +21,7 @@ WAYPOINTS = [
 WAYPOINT_THRESHOLD = 0.08
 SPEED_BASE = 500
 SPEED_TURN = 400
-ANGLE_TOL  = 10  # degrees
+ANGLE_TOL  = 25  # degrees
 
 # Camera angle convention:
 #   "math"    → 0° = right (+x), counter-clockwise positive  (atan2(dy, dx))
@@ -86,9 +86,9 @@ def drive_to(pipuck, wx, wy, label=""):
         if abs(err) > ANGLE_TOL:
             # Stop and turn in place until aligned
             if err > 0:
-                pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
-            else:
                 pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
+            else:
+                pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
         else:
             # Aligned — drive straight, no correction
             pipuck.epuck.set_motor_speeds(SPEED_BASE, SPEED_BASE)
