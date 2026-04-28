@@ -45,14 +45,23 @@ def on_connect(client, userdata, flags, rc):
     client.subscribe("robot_pos/all")
 
 
+_debug_msgs_logged = 0
+
+
 def on_message(client, userdata, msg):
+    global _debug_msgs_logged
     try:
         data = json.loads(msg.payload.decode())
     except json.JSONDecodeError:
         print(f"invalid json: {msg.payload}")
         return
+    if _debug_msgs_logged < 3:
+        print(f"[debug] raw payload: {data!r}")
+        _debug_msgs_logged += 1
     pose = extract_pose(data, ROBOT_ID)
     if pose is None:
+        if _debug_msgs_logged <= 3:
+            print(f"[debug] extract_pose returned None for ID {ROBOT_ID}")
         return
     try:
         x = float(pose["x"])
