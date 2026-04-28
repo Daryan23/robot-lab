@@ -20,9 +20,11 @@ ZONE_MARGIN = 0.08
 LOOKAHEAD = 0.20
 
 FORWARD_SPEED = 600
-TURN_SPEED = 400
-IR_THRESHOLD = 200
-POSE_TIMEOUT = 3.0
+STEER_DELTA = 350
+HARD_PIVOT_SPEED = 450
+IR_SOFT = 600
+IR_HARD = 1500
+POSE_TIMEOUT = 5.0
 TICK = 0.05
 RUN_DURATION = 60.0
 
@@ -141,12 +143,18 @@ def heading_to_center(x, y, theta):
     return (target - theta + math.pi) % (2 * math.pi) - math.pi
 
 
-def front_obstacle(ir):
-    return ir[0] > IR_THRESHOLD or ir[7] > IR_THRESHOLD
+def ir_front_max(ir):
+    return max(ir[0], ir[7])
 
 
-def turn_direction_for_obstacle(ir):
+def ir_turn_sign(ir):
     return -1 if (ir[0] + ir[1]) > (ir[7] + ir[6]) else 1
+
+
+def drive(pipuck, forward, steer):
+    left = max(-1000, min(1000, forward + steer))
+    right = max(-1000, min(1000, forward - steer))
+    pipuck.epuck.set_motor_speeds(left, right)
 
 
 zones = load_zones()
@@ -160,66 +168,54 @@ client.loop_start()
 pipuck = PiPuck(epuck_version=2)
 
 start = time.time()
-state = "FORWARD"
-state_until = start + random.uniform(1.5, 3.0)
-turn_sign = 1
+random_steer = 0
+random_steer_until = start
 
 try:
     while time.time() - start < RUN_DURATION:
         now = time.time()
         ir = pipuck.epuck.ir_reflected
+        ir_front = ir_front_max(ir)
 
-        if front_obstacle(ir):
-            sign = turn_direction_for_obstacle(ir)
-            pipuck.epuck.set_motor_speeds(sign * TURN_SPEED, -sign * TURN_SPEED)
-            time.sleep(random.uniform(0.4, 0.9))
-            state = "FORWARD"
-            state_until = time.time() + random.uniform(1.5, 3.0)
+        if ir_front > IR_HARD:
+            sign = ir_turn_sign(ir)
+            drive(pipuck, 0, sign * HARD_PIVOT_SPEED)
+            time.sleep(0.25)
+            random_steer = 0
+            random_steer_until = time.time()
             continue
+
+        if now >= random_steer_until:
+            random_steer = random.choice((-1, 0, 0, 1)) * STEER_DELTA // 2
+            random_steer_until = now + random.uniform(0.8, 2.5)
+
+        steer = random_steer
+        forward = FORWARD_SPEED
+
+        if ir_front > IR_SOFT:
+            steer = ir_turn_sign(ir) * STEER_DELTA
+            forward = FORWARD_SPEED // 2
 
         pose = get_pose()
-        if pose is None:
-            pipuck.epuck.set_motor_speeds(0, 0)
-            print("no pose — holding")
-            time.sleep(0.2)
-            continue
-
-        x, y, theta, in_danger = pose
-
-        if in_danger:
-            diff = heading_to_center(x, y, theta)
-            sign = 1 if diff > 0 else -1
-            pipuck.epuck.set_motor_speeds(-FORWARD_SPEED, -FORWARD_SPEED)
-            time.sleep(0.4)
-            pipuck.epuck.set_motor_speeds(sign * TURN_SPEED, -sign * TURN_SPEED)
-            time.sleep(random.uniform(0.6, 1.2))
-            state = "FORWARD"
-            state_until = time.time() + random.uniform(1.5, 3.0)
-            continue
-
-        ahead_x = x + LOOKAHEAD * math.cos(theta)
-        ahead_y = y + LOOKAHEAD * math.sin(theta)
-        zone_ahead = point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN)
-
-        if state == "FORWARD":
-            if near_boundary(x, y) or zone_ahead:
+        if pose is not None:
+            x, y, theta, in_danger = pose
+            override = False
+            if in_danger:
                 diff = heading_to_center(x, y, theta)
-                turn_sign = 1 if diff > 0 else -1
-                state = "TURN"
-                state_until = now + min(2.0, abs(diff) / 1.5 + 0.3)
-            elif now >= state_until:
-                state = "TURN"
-                turn_sign = random.choice((-1, 1))
-                state_until = now + random.uniform(0.3, 1.2)
+                steer = (1 if diff > 0 else -1) * STEER_DELTA
+                forward = FORWARD_SPEED // 2
+                override = True
+            else:
+                ahead_x = x + LOOKAHEAD * math.cos(theta)
+                ahead_y = y + LOOKAHEAD * math.sin(theta)
+                if near_boundary(x, y) or point_in_any_zone(ahead_x, ahead_y, zones, ZONE_MARGIN):
+                    diff = heading_to_center(x, y, theta)
+                    steer = (1 if diff > 0 else -1) * STEER_DELTA
+                    override = True
+            if override:
+                random_steer_until = now + random.uniform(0.8, 2.5)
 
-        if state == "TURN":
-            pipuck.epuck.set_motor_speeds(turn_sign * TURN_SPEED, -turn_sign * TURN_SPEED)
-            if now >= state_until:
-                state = "FORWARD"
-                state_until = now + random.uniform(1.5, 3.0)
-        else:
-            pipuck.epuck.set_motor_speeds(FORWARD_SPEED, FORWARD_SPEED)
-
+        drive(pipuck, forward, steer)
         time.sleep(TICK)
 finally:
     pipuck.epuck.set_motor_speeds(0, 0)
