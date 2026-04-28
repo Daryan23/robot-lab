@@ -85,10 +85,7 @@ _blink_lock   = threading.Lock()
 
 def set_leds_red(pipuck, on):
     try:
-        if on:
-            pipuck.epuck.set_rgb_leds([(100, 0, 0)] * 4)
-        else:
-            pipuck.epuck.set_rgb_leds([(0, 0, 0)] * 4)
+        pipuck.epuck.set_leds(0xFF if on else 0x00)
     except Exception:
         pass
 
