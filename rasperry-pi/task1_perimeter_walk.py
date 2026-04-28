@@ -11,7 +11,7 @@ ROBOT_ID = "26"
 
 # Arena: 2.0 m × 1.0 m
 ARENA_X, ARENA_Y = 2.0, 1.0
-MARGIN = 0.10  # 10 cm safe distance from border
+MARGIN = 0.15  # 15 cm safe distance from border
 
 # Perimeter waypoints, traversed counter-clockwise (BL → BR → TR → TL → ...)
 WAYPOINTS = [
