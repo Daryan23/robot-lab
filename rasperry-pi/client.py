@@ -35,11 +35,8 @@ pipuck = PiPuck(epuck_version=2)
 # Set the robot's speed, e.g. with
 pipuck.epuck.set_motor_speeds(1000,-1000)
 
-for _ in range(1000):
-    # TODO: Do your stuff here
-	time.sleep(1)
-	
-    
+time.sleep(10)
+
 # Stop the MQTT client loop
 pipuck.epuck.set_motor_speeds(0,0)
-client.loop_stop()  
+client.loop_stop()
