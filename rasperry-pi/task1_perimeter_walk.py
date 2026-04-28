@@ -36,7 +36,6 @@ ANGLE_CONVENTION = "compass"
 OBSTACLE_RADIUS       = 0.35   # detect another robot within this range ahead
 OBSTACLE_LATERAL      = 0.18   # half-width of the corridor we treat as "in path"
 OBSTACLE_STALE_S      = 1.5    # ignore positions older than this
-EMERGENCY_RADIUS      = 0.18   # if anyone is this close, hard-stop
 DETOUR_INWARD         = 0.30   # how far to step away from the border
 DETOUR_PASS_AHEAD     = 0.35   # how far past the obstacle before rejoining perimeter
 SEGMENT_END_BUFFER    = 0.05   # don't aim past this close to the next corner
@@ -102,69 +101,63 @@ def angle_diff(target, current):
     return (target - current + 180) % 360 - 180
 
 
-def segment_geometry(target_idx):
-    """Geometry of the perimeter segment ending at WAYPOINTS[target_idx]."""
-    a = WAYPOINTS[(target_idx - 1) % len(WAYPOINTS)]
-    b = WAYPOINTS[target_idx % len(WAYPOINTS)]
-    dx = b[0] - a[0]
-    dy = b[1] - a[1]
-    L = math.hypot(dx, dy)
-    sd = (dx / L, dy / L)
-    inward = (-sd[1], sd[0])  # CCW-perpendicular = toward arena interior
-    return a, b, sd, inward, L
-
-
-def obstacle_blocking_segment(my_x, my_y, target_idx):
-    """Closest other robot ahead of us in the corridor along the current segment."""
-    a, _, sd, _, L = segment_geometry(target_idx)
-    my_t = (my_x - a[0]) * sd[0] + (my_y - a[1]) * sd[1]
+def obstacle_in_path(my_x, my_y, tx, ty):
+    """Closest other robot inside the forward corridor between us and (tx, ty)."""
+    fdx, fdy = tx - my_x, ty - my_y
+    L = math.hypot(fdx, fdy)
+    if L < 1e-6:
+        return None
+    fx, fy = fdx / L, fdy / L
 
     closest = None
     closest_d = float("inf")
     for ox, oy in other_robots():
-        ot  = (ox - a[0]) * sd[0] + (oy - a[1]) * sd[1]
-        if ot <= my_t + 0.02:
+        rx, ry = ox - my_x, oy - my_y
+        f = rx * fx + ry * fy
+        if f <= 0.02 or f > OBSTACLE_RADIUS:
             continue
-        if ot > L:
+        if f > L - 0.02:  # past or at the target
             continue
-        lx = (ox - a[0]) - ot * sd[0]
-        ly = (oy - a[1]) - ot * sd[1]
+        lx = rx - f * fx
+        ly = ry - f * fy
         if math.hypot(lx, ly) > OBSTACLE_LATERAL:
             continue
-        d = math.hypot(ox - my_x, oy - my_y)
-        if d > OBSTACLE_RADIUS:
-            continue
+        d = math.hypot(rx, ry)
         if d < closest_d:
             closest_d = d
             closest = (ox, oy)
     return closest
 
 
-def too_close_any():
-    st = my_state()
-    if not st:
-        return False
-    for ox, oy in other_robots():
-        if math.hypot(ox - st["x"], oy - st["y"]) < EMERGENCY_RADIUS:
-            return True
-    return False
+def inward_perp(my_x, my_y, fx, fy):
+    """Pick the perpendicular of (fx, fy) that points toward the arena center."""
+    cw  = ( fy, -fx)
+    ccw = (-fy,  fx)
+    tcx, tcy = (ARENA_X / 2 - my_x), (ARENA_Y / 2 - my_y)
+    return ccw if (ccw[0] * tcx + ccw[1] * tcy) >= (cw[0] * tcx + cw[1] * tcy) else cw
 
 
-def build_detour(my_x, my_y, obstacle, target_idx):
-    """Three-waypoint detour: step inward, pass the obstacle, step back to perimeter."""
-    a, _, sd, inward, L = segment_geometry(target_idx)
+def build_detour(my_x, my_y, tx, ty, obstacle):
+    """Three-waypoint detour around `obstacle` while heading from (my) toward (tx, ty)."""
+    fdx, fdy = tx - my_x, ty - my_y
+    L = math.hypot(fdx, fdy)
+    if L < 1e-6:
+        return []
+    fx, fy = fdx / L, fdy / L
+    ix, iy = inward_perp(my_x, my_y, fx, fy)
+
     ox, oy = obstacle
-    ot = (ox - a[0]) * sd[0] + (oy - a[1]) * sd[1]
+    ot = (ox - my_x) * fx + (oy - my_y) * fy
     pass_t = min(ot + DETOUR_PASS_AHEAD, L - SEGMENT_END_BUFFER)
+    pass_t = max(pass_t, ot + 0.05)  # at least nudge past the obstacle
 
-    d1 = (my_x + DETOUR_INWARD * inward[0],
-          my_y + DETOUR_INWARD * inward[1])
-    d2 = (a[0] + pass_t * sd[0] + DETOUR_INWARD * inward[0],
-          a[1] + pass_t * sd[1] + DETOUR_INWARD * inward[1])
-    d3 = (a[0] + pass_t * sd[0],
-          a[1] + pass_t * sd[1])
+    d1 = (my_x + DETOUR_INWARD * ix,
+          my_y + DETOUR_INWARD * iy)
+    d2 = (my_x + pass_t * fx + DETOUR_INWARD * ix,
+          my_y + pass_t * fy + DETOUR_INWARD * iy)
+    d3 = (my_x + pass_t * fx,
+          my_y + pass_t * fy)
 
-    # Clamp to safe interior so we never head past the border margin
     def clamp(p):
         return (
             min(max(p[0], MARGIN), ARENA_X - MARGIN),
@@ -239,19 +232,16 @@ def main():
                     target_idx += 1
                 continue
 
-            # Hard-stop if anyone is critically close
-            if too_close_any():
-                pipuck.epuck.set_motor_speeds(0, 0)
-                print("  ! emergency stop — another robot too close")
-                time.sleep(0.2)
-                continue
-
-            # While walking the perimeter, look ahead for blockers and plan a detour
-            if not on_detour and in_perimeter:
-                obs = obstacle_blocking_segment(x, y, target_idx)
-                if obs:
+            # Look ahead for any other robot in our path and plan a detour around it.
+            # Works in any state (initial approach, perimeter, even already-detouring) —
+            # if a new blocker appears we just re-plan from current position.
+            obs = obstacle_in_path(x, y, tx, ty)
+            if obs:
+                final_target = WAYPOINTS[target_idx % len(WAYPOINTS)]
+                new_detour = build_detour(x, y, final_target[0], final_target[1], obs)
+                if new_detour:
                     print(f"  obstacle at ({obs[0]:.2f},{obs[1]:.2f}) — detouring")
-                    detour_queue = build_detour(x, y, obs, target_idx)
+                    detour_queue = new_detour
                     continue
 
             # Compute desired heading
