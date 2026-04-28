@@ -24,21 +24,19 @@ WAYPOINTS = [
 WAYPOINT_THRESHOLD = 0.08
 SPEED_BASE = 500
 SPEED_TURN = 400
-SPEED_MAX  = 1000
-ANGLE_SPIN_IN_PLACE = 60   # if heading error exceeds this, stop and spin to align
-ANGLE_FULL_STEER    = 45   # err magnitude that maps to maximum steering bias
+ANGLE_TURN_THRESHOLD = 30  # if heading error exceeds this, spin in place; else drive straight
 
 # Camera angle convention:
 #   "math"    → 0° = right (+x), counter-clockwise positive  (atan2(dy, dx))
 #   "compass" → 0° = up   (+y), clockwise positive           (atan2(dx, dy))
 ANGLE_CONVENTION = "compass"
 
-# Obstacle avoidance
-OBSTACLE_RADIUS       = 0.35   # detect another robot within this range ahead
-OBSTACLE_LATERAL      = 0.18   # half-width of the corridor we treat as "in path"
+# Obstacle avoidance — only react if another robot is genuinely in our way.
+OBSTACLE_RADIUS       = 0.22   # only consider robots ahead within this range
+OBSTACLE_LATERAL      = 0.10   # robot is "in the path" only if within 10 cm of our line
 OBSTACLE_STALE_S      = 1.5    # ignore positions older than this
-DETOUR_INWARD         = 0.30   # how far to step away from the border
-DETOUR_PASS_AHEAD     = 0.35   # how far past the obstacle before rejoining perimeter
+DETOUR_INWARD         = 0.25   # step this far away from the border to bypass
+DETOUR_PASS_AHEAD     = 0.30   # how far past the blocker before returning to perimeter
 SEGMENT_END_BUFFER    = 0.05   # don't aim past this close to the next corner
 
 robots_state = {}  # robot_id -> {"x", "y", "angle", "last_seen"}
@@ -72,6 +70,7 @@ def my_state():
 
 
 def other_robots():
+    """List of (id, x, y) for every other robot we've seen recently."""
     now = time.time()
     out = []
     for rid, st in robots_state.items():
@@ -79,7 +78,7 @@ def other_robots():
             continue
         if now - st.get("last_seen", 0) > OBSTACLE_STALE_S:
             continue
-        out.append((st["x"], st["y"]))
+        out.append((rid, st["x"], st["y"]))
     return out
 
 
@@ -91,19 +90,16 @@ def target_heading_cardinal(dx, dy):
     return round(raw / 90) * 90 % 360
 
 
-def target_heading_free(dx, dy):
-    if ANGLE_CONVENTION == "compass":
-        return math.degrees(math.atan2(dx, dy)) % 360
-    return math.degrees(math.atan2(dy, dx)) % 360
-
-
 def angle_diff(target, current):
     """Signed shortest difference. Positive = turn CW (compass convention)."""
     return (target - current + 180) % 360 - 180
 
 
 def obstacle_in_path(my_x, my_y, tx, ty):
-    """Closest other robot inside the forward corridor between us and (tx, ty)."""
+    """Closest other robot inside the forward corridor between us and (tx, ty).
+
+    Returns (id, x, y) of the blocker or None.
+    """
     fdx, fdy = tx - my_x, ty - my_y
     L = math.hypot(fdx, fdy)
     if L < 1e-6:
@@ -112,7 +108,7 @@ def obstacle_in_path(my_x, my_y, tx, ty):
 
     closest = None
     closest_d = float("inf")
-    for ox, oy in other_robots():
+    for rid, ox, oy in other_robots():
         rx, ry = ox - my_x, oy - my_y
         f = rx * fx + ry * fy
         if f <= 0.02 or f > OBSTACLE_RADIUS:
@@ -126,7 +122,7 @@ def obstacle_in_path(my_x, my_y, tx, ty):
         d = math.hypot(rx, ry)
         if d < closest_d:
             closest_d = d
-            closest = (ox, oy)
+            closest = (rid, ox, oy)
     return closest
 
 
@@ -195,7 +191,6 @@ def main():
     pipuck = PiPuck(epuck_version=2)
 
     target_idx = nearest_waypoint_index()
-    in_perimeter = False  # True after we first reach a corner — then cardinal motion kicks in
     detour_queue = []
 
     print(f"Heading to nearest corner #{target_idx}: {WAYPOINTS[target_idx]}")
@@ -208,15 +203,15 @@ def main():
                 continue
             x, y, angle = st["x"], st["y"], st["angle"]
 
-            # Pick the current driving target
+            # Pick the current driving target. Heading is always snapped to the nearest
+            # cardinal direction so motion stays parallel to the borders, both on the
+            # perimeter and during detours (which are always axis-aligned).
             if detour_queue:
                 tx, ty, label = detour_queue[0]
-                cardinal = False
                 on_detour = True
             else:
                 tx, ty = WAYPOINTS[target_idx % len(WAYPOINTS)]
                 label = f"perim #{target_idx % len(WAYPOINTS)}"
-                cardinal = in_perimeter
                 on_detour = False
 
             dx, dy = tx - x, ty - y
@@ -230,39 +225,37 @@ def main():
                 if on_detour:
                     detour_queue.pop(0)
                 else:
-                    in_perimeter = True
                     target_idx += 1
                 continue
 
             # Look ahead for any other robot in our path and plan a detour around it.
-            # Works in any state (initial approach, perimeter, even already-detouring) —
-            # if a new blocker appears we just re-plan from current position.
+            # Works in any state (perimeter or already-detouring) — if a new blocker
+            # appears we just re-plan from current position toward the next perimeter
+            # corner. Only triggers when a robot is genuinely in our path: within
+            # OBSTACLE_RADIUS ahead and OBSTACLE_LATERAL of our line of motion.
             obs = obstacle_in_path(x, y, tx, ty)
             if obs:
+                rid, ox, oy = obs
                 final_target = WAYPOINTS[target_idx % len(WAYPOINTS)]
-                new_detour = build_detour(x, y, final_target[0], final_target[1], obs)
+                new_detour = build_detour(x, y, final_target[0], final_target[1], (ox, oy))
                 if new_detour:
-                    print(f"  obstacle at ({obs[0]:.2f},{obs[1]:.2f}) — detouring")
+                    print(f"  robot {rid} at ({ox:.2f},{oy:.2f}) blocking — detouring")
                     detour_queue = new_detour
                     continue
 
-            # Compute desired heading
-            hdg_t = target_heading_cardinal(dx, dy) if cardinal else target_heading_free(dx, dy)
+            # Always snap to nearest cardinal so motion stays parallel to the border.
+            hdg_t = target_heading_cardinal(dx, dy)
             err = angle_diff(hdg_t, angle)
 
-            # Always command motors — never leave them in a dead zone.
-            if abs(err) > ANGLE_SPIN_IN_PLACE:
-                # Heading error too big to drive forward usefully — spin in place.
+            # Single-threshold controller: spin in place to align, else drive straight.
+            # Always commands motors so we never sit in a dead zone.
+            if abs(err) > ANGLE_TURN_THRESHOLD:
                 if err > 0:
                     left, right = SPEED_TURN, -SPEED_TURN
                 else:
                     left, right = -SPEED_TURN, SPEED_TURN
             else:
-                # Proportional steering: drive forward, biasing wheels toward target heading.
-                ratio = max(-1.0, min(1.0, err / ANGLE_FULL_STEER))
-                steer = int(SPEED_TURN * ratio)
-                left  = max(-SPEED_MAX, min(SPEED_MAX, SPEED_BASE + steer))
-                right = max(-SPEED_MAX, min(SPEED_MAX, SPEED_BASE - steer))
+                left, right = SPEED_BASE, SPEED_BASE
             pipuck.epuck.set_motor_speeds(left, right)
 
             print(f"  {label} pos=({x:.2f},{y:.2f}) dist={dist:.2f} "
