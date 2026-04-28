@@ -3,6 +3,7 @@ import json
 import time
 from pipuck.pipuck import PiPuck
 
+
 # Define variables and callbacks
 Broker = "192.168.178.43"  # Replace with your broker address
 Port = 1883 # standard MQTT port
@@ -26,6 +27,7 @@ client.on_connect = on_connect
 client.on_message = on_message
 
 client.connect(Broker, Port, 60)
+print("crispy stinkt nach kot")
 
 client.loop_start() # Start listening loop in separate thread
 
