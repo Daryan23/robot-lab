@@ -43,6 +43,7 @@ def on_message(client, userdata, msg):
         if "x" in entry and "y" in entry:
             robot_pos["x"] = float(entry["x"])
             robot_pos["y"] = float(entry["y"])
+            print(robot_pos["x"], robot_pos["y"])
     except (json.JSONDecodeError, KeyError, ValueError):
         pass
 
