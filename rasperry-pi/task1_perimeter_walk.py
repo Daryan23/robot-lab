@@ -84,16 +84,14 @@ def drive_to(pipuck, wx, wy, label=""):
         err = angle_diff(hdg, angle)
 
         if abs(err) > ANGLE_TOL:
+            # Stop and turn in place until aligned
             if err > 0:
                 pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
             else:
                 pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
         else:
-            correction = int(err * 3)
-            pipuck.epuck.set_motor_speeds(
-                SPEED_BASE - correction,
-                SPEED_BASE + correction,
-            )
+            # Aligned — drive straight, no correction
+            pipuck.epuck.set_motor_speeds(SPEED_BASE, SPEED_BASE)
 
         print(f"  pos=({x:.2f},{y:.2f}) dist={dist:.2f} hdg={hdg:.0f}° robot={angle:.0f}° err={err:.1f}°")
         time.sleep(0.05)
