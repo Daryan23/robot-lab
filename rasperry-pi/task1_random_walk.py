@@ -168,8 +168,9 @@ client.loop_start()
 pipuck = PiPuck(epuck_version=2)
 
 start = time.time()
-random_steer = 0
-random_steer_until = start
+walk_state = "STRAIGHT"
+walk_state_until = start + random.uniform(2.0, 4.5)
+walk_turn_steer = 0
 
 try:
     while time.time() - start < RUN_DURATION:
@@ -181,15 +182,22 @@ try:
             sign = ir_turn_sign(ir)
             drive(pipuck, 0, sign * HARD_PIVOT_SPEED)
             time.sleep(0.25)
-            random_steer = 0
-            random_steer_until = time.time()
+            walk_state = "STRAIGHT"
+            walk_state_until = time.time() + random.uniform(2.0, 4.5)
             continue
 
-        if now >= random_steer_until:
-            random_steer = random.choice((-1, 0, 0, 1)) * STEER_DELTA // 2
-            random_steer_until = now + random.uniform(0.8, 2.5)
+        if walk_state == "STRAIGHT":
+            steer = 0
+            if now >= walk_state_until:
+                walk_state = "TURN"
+                walk_turn_steer = random.choice((-1, 1)) * STEER_DELTA
+                walk_state_until = now + random.uniform(0.3, 1.5)
+        else:
+            steer = walk_turn_steer
+            if now >= walk_state_until:
+                walk_state = "STRAIGHT"
+                walk_state_until = now + random.uniform(2.0, 4.5)
 
-        steer = random_steer
         forward = FORWARD_SPEED
 
         if ir_front > IR_SOFT:
@@ -213,7 +221,8 @@ try:
                     steer = (1 if diff > 0 else -1) * STEER_DELTA
                     override = True
             if override:
-                random_steer_until = now + random.uniform(0.8, 2.5)
+                walk_state = "STRAIGHT"
+                walk_state_until = now + random.uniform(2.0, 4.5)
 
         drive(pipuck, forward, steer)
         time.sleep(TICK)
