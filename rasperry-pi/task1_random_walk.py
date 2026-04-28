@@ -7,9 +7,9 @@ from pipuck.pipuck import PiPuck
 Broker = "192.168.178.43"
 Port = 1883
 
-# Workspace boundaries in camera coordinates (metres) — adjust to your arena
-X_MIN, X_MAX = -1.0, 1.0
-Y_MIN, Y_MAX = -1.0, 1.0
+# Workspace boundaries: 2 m wide (x) × 1 m deep (y), centred at origin
+X_MIN, X_MAX = 0, 2.0
+Y_MIN, Y_MAX = 0, 1.0
 BOUNDARY_MARGIN = 0.15  # start turning this far from the edge
 
 # Motor speed constants
