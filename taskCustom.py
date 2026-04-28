@@ -21,11 +21,13 @@ CENTER = (0.5 * (X_MIN + X_MAX), 0.5 * (Y_MIN + Y_MAX))
 ZONE_MARGIN = 0.10
 OTHER_MARGIN = 0.40
 LOOKAHEAD = 0.30
+BORDER_TRIGGER_MARGIN = 0.10
 
 FORWARD_SPEED = 750
+RECOVER_FORWARD = 450
 WANDER_STEER = 320
 MAX_STEER = 750
-TURN_INTENSITY_FULL = math.radians(60)
+TURN_INTENSITY_FULL = math.radians(35)
 
 TICK = 0.05
 POSE_TIMEOUT = 1.5
@@ -258,7 +260,8 @@ try:
         mode = ""
 
         if now >= recovery_until and (
-            out_of_bounds(x, y, 0.0) or out_of_bounds(ahead_x, ahead_y, 0.0)
+            out_of_bounds(x, y, BORDER_TRIGGER_MARGIN)
+            or out_of_bounds(ahead_x, ahead_y, BORDER_TRIGGER_MARGIN)
         ):
             recovery_until = now + RECOVER_DRIVE_TIME
 
@@ -275,6 +278,7 @@ try:
                 tx, ty = gx, gy
                 mode = f"RECOVER({recovery_until - now:.1f}s)"
             target = math.atan2(ty, tx)
+            forward = RECOVER_FORWARD
             steer = steer_toward(target, theta)
             walk_state = "STRAIGHT"
             walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
