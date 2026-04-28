@@ -24,8 +24,9 @@ WAYPOINTS = [
 WAYPOINT_THRESHOLD = 0.08
 SPEED_BASE = 500
 SPEED_TURN = 400
-ANGLE_START_DRIVING = 30
-ANGLE_STOP_DRIVING  = 50
+SPEED_MAX  = 1000
+ANGLE_SPIN_IN_PLACE = 60   # if heading error exceeds this, stop and spin to align
+ANGLE_FULL_STEER    = 45   # err magnitude that maps to maximum steering bias
 
 # Camera angle convention:
 #   "math"    → 0° = right (+x), counter-clockwise positive  (atan2(dy, dx))
@@ -221,9 +222,10 @@ def main():
             dx, dy = tx - x, ty - y
             dist = math.hypot(dx, dy)
 
-            # Reached current target?
+            # Reached current target? Advance without halting — next iteration will
+            # immediately recompute motor commands toward the new target so the robot
+            # never sits at zero velocity in a steering dead zone.
             if dist < WAYPOINT_THRESHOLD:
-                pipuck.epuck.set_motor_speeds(0, 0)
                 print(f"  reached {label} ({x:.2f},{y:.2f})")
                 if on_detour:
                     detour_queue.pop(0)
@@ -248,16 +250,24 @@ def main():
             hdg_t = target_heading_cardinal(dx, dy) if cardinal else target_heading_free(dx, dy)
             err = angle_diff(hdg_t, angle)
 
-            if abs(err) > ANGLE_STOP_DRIVING:
+            # Always command motors — never leave them in a dead zone.
+            if abs(err) > ANGLE_SPIN_IN_PLACE:
+                # Heading error too big to drive forward usefully — spin in place.
                 if err > 0:
-                    pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
+                    left, right = SPEED_TURN, -SPEED_TURN
                 else:
-                    pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
-            elif abs(err) < ANGLE_START_DRIVING:
-                pipuck.epuck.set_motor_speeds(SPEED_BASE, SPEED_BASE)
+                    left, right = -SPEED_TURN, SPEED_TURN
+            else:
+                # Proportional steering: drive forward, biasing wheels toward target heading.
+                ratio = max(-1.0, min(1.0, err / ANGLE_FULL_STEER))
+                steer = int(SPEED_TURN * ratio)
+                left  = max(-SPEED_MAX, min(SPEED_MAX, SPEED_BASE + steer))
+                right = max(-SPEED_MAX, min(SPEED_MAX, SPEED_BASE - steer))
+            pipuck.epuck.set_motor_speeds(left, right)
 
             print(f"  {label} pos=({x:.2f},{y:.2f}) dist={dist:.2f} "
-                  f"hdg={hdg_t:.0f}° robot={angle:.0f}° err={err:.1f}°")
+                  f"hdg={hdg_t:.0f}° robot={angle:.0f}° err={err:.1f}° "
+                  f"motors=({left},{right})")
             time.sleep(0.05)
 
     except KeyboardInterrupt:
