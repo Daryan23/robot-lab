@@ -21,7 +21,8 @@ WAYPOINTS = [
 WAYPOINT_THRESHOLD = 0.08
 SPEED_BASE = 500
 SPEED_TURN = 400
-ANGLE_TOL  = 25  # degrees
+ANGLE_START_DRIVING = 30   # start driving once within this error
+ANGLE_STOP_DRIVING  = 50   # stop and re-align if error grows beyond this
 
 # Camera angle convention:
 #   "math"    → 0° = right (+x), counter-clockwise positive  (atan2(dy, dx))
@@ -50,9 +51,11 @@ def on_message(client, userdata, msg):
 
 def target_heading(dx, dy):
     if ANGLE_CONVENTION == "compass":
-        return math.degrees(math.atan2(dx, dy)) % 360
+        raw = math.degrees(math.atan2(dx, dy)) % 360
     else:
-        return math.degrees(math.atan2(dy, dx)) % 360
+        raw = math.degrees(math.atan2(dy, dx)) % 360
+    # Snap to nearest cardinal direction so robot walks parallel to borders
+    return round(raw / 90) * 90 % 360
 
 
 def angle_diff(target, current):
@@ -80,14 +83,12 @@ def drive_to(pipuck, wx, wy, label=""):
         hdg = target_heading(dx, dy)
         err = angle_diff(hdg, angle)
 
-        if abs(err) > ANGLE_TOL:
-            # Stop and turn in place until aligned
+        if abs(err) > ANGLE_STOP_DRIVING:
             if err > 0:
                 pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
             else:
                 pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
-        else:
-            # Aligned — drive straight, no correction
+        elif abs(err) < ANGLE_START_DRIVING:
             pipuck.epuck.set_motor_speeds(SPEED_BASE, SPEED_BASE)
 
         print(f"  pos=({x:.2f},{y:.2f}) dist={dist:.2f} hdg={hdg:.0f}° robot={angle:.0f}° err={err:.1f}°")
