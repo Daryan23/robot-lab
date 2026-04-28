@@ -56,11 +56,8 @@ def target_heading(dx, dy):
 
 
 def angle_diff(target, current):
-    """Signed shortest difference: positive = turn left/CCW."""
-    diff = (target - current + 180) % 360 - 180
-    if ANGLE_CONVENTION == "compass":
-        diff = -diff  # compass is CW, so flip sign for motor logic
-    return diff
+    """Signed shortest difference. Positive = turn CW (compass convention)."""
+    return (target - current + 180) % 360 - 180
 
 
 def drive_to(pipuck, wx, wy, label=""):
