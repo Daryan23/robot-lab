@@ -1,42 +1,301 @@
-import paho.mqtt.client as mqtt
 import json
+import math
+import random
+import threading
 import time
+import urllib.request
+
+import paho.mqtt.client as mqtt
 from pipuck.pipuck import PiPuck
 
-# Define variables and callbacks
-Broker = "192.168.178.43"  # Replace with your broker address
-Port = 1883 # standard MQTT port
+BROKER = "192.168.178.43"
+PORT = 1883
+TOPIC = "robot_pos/all"
+ZONES_URL = f"http://{BROKER}:3000/danger_zones.json"
+ROBOT_ID = "32"
 
-# function to handle connection
+X_MIN, X_MAX = 0.1, 1.9
+Y_MIN, Y_MAX = 0.1, 0.9
+CENTER = (0.5 * (X_MIN + X_MAX), 0.5 * (Y_MIN + Y_MAX))
+
+BOUNDARY_MARGIN = 0.15
+ZONE_MARGIN = 0.10
+OTHER_MARGIN = 0.22
+LOOKAHEAD = 0.22
+
+FORWARD_SPEED = 400
+PIVOT_SPEED = 350
+STEER_DELTA = 220
+
+PIVOT_THRESHOLD = math.radians(45)
+STEER_DEAD = math.radians(10)
+
+TICK = 0.05
+POSE_TIMEOUT = 1.5
+OTHER_TIMEOUT = 3.0
+LOG_INTERVAL = 0.5
+
+STRAIGHT_MIN, STRAIGHT_MAX = 2.0, 4.5
+TURN_MIN, TURN_MAX = 0.4, 1.0
+
+
+pose_lock = threading.Lock()
+my_pose = {"x": None, "y": None, "theta": None, "t": 0.0}
+
+others_lock = threading.Lock()
+others = {}
+
+
+def load_zones():
+    try:
+        with urllib.request.urlopen(ZONES_URL, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+        zs = data.get("zones", [])
+        print(f"loaded {len(zs)} danger zone(s)")
+        return zs
+    except Exception as exc:
+        print(f"could not load danger zones ({exc}); continuing without them")
+        return []
+
+
+def in_circle(x, y, z, margin):
+    cx, cy = z["center"]["x"], z["center"]["y"]
+    return math.hypot(x - cx, y - cy) <= z["radius"] + margin
+
+
+def in_polygon(x, y, z, margin):
+    pts = z["points"]
+    inside = False
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]["x"], pts[i]["y"]
+        xj, yj = pts[j]["x"], pts[j]["y"]
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / (yj - yi + 1e-12) + xi):
+            inside = not inside
+        j = i
+    if inside:
+        return True
+    if margin <= 0:
+        return False
+    min_d2 = float("inf")
+    j = len(pts) - 1
+    for i in range(len(pts)):
+        xi, yi = pts[i]["x"], pts[i]["y"]
+        xj, yj = pts[j]["x"], pts[j]["y"]
+        ex, ey = xi - xj, yi - yj
+        seg2 = ex * ex + ey * ey
+        t = 0.0 if seg2 == 0 else max(0.0, min(1.0, ((x - xj) * ex + (y - yj) * ey) / seg2))
+        px, py = xj + t * ex, yj + t * ey
+        d2 = (x - px) ** 2 + (y - py) ** 2
+        if d2 < min_d2:
+            min_d2 = d2
+        j = i
+    return min_d2 <= margin * margin
+
+
+def hits_zone(x, y, zones, margin):
+    for z in zones:
+        kind = z.get("type")
+        if kind == "circle" and in_circle(x, y, z, margin):
+            return True
+        if kind == "polygon" and in_polygon(x, y, z, margin):
+            return True
+    return False
+
+
 def on_connect(client, userdata, flags, rc):
-    print("Connected with result code " + str(rc))
-    client.subscribe("robot_pos/all")
+    print(f"connected mqtt rc={rc}")
+    client.subscribe(TOPIC)
 
-# function to handle incoming messages
+
 def on_message(client, userdata, msg):
     try:
         data = json.loads(msg.payload.decode())
-        print(data)
     except json.JSONDecodeError:
-        print(f'invalid json: {msg.payload}')
+        return
+    if not isinstance(data, dict):
+        return
+    now = time.time()
+    pending = {}
+    for rid, entry in data.items():
+        if not isinstance(entry, dict):
+            continue
+        pos = entry.get("position")
+        if not (isinstance(pos, (list, tuple)) and len(pos) >= 2):
+            continue
+        try:
+            x = float(pos[0])
+            y = float(pos[1])
+        except (TypeError, ValueError):
+            continue
+        if str(rid) == ROBOT_ID:
+            try:
+                theta = math.radians(float(entry.get("angle", 0.0)))
+            except (TypeError, ValueError):
+                continue
+            with pose_lock:
+                my_pose.update(x=x, y=y, theta=theta, t=now)
+        else:
+            pending[str(rid)] = (x, y, now)
+    if pending:
+        with others_lock:
+            others.update(pending)
 
-# Initialize MQTT client
+
+def get_pose():
+    with pose_lock:
+        if my_pose["x"] is None or time.time() - my_pose["t"] > POSE_TIMEOUT:
+            return None
+        return (my_pose["x"], my_pose["y"], my_pose["theta"])
+
+
+def fresh_others():
+    cutoff = time.time() - OTHER_TIMEOUT
+    with others_lock:
+        return [(rid, x, y) for rid, (x, y, t) in others.items() if t >= cutoff]
+
+
+def out_of_bounds(x, y, margin=0.0):
+    return (
+        x < X_MIN + margin
+        or x > X_MAX - margin
+        or y < Y_MIN + margin
+        or y > Y_MAX - margin
+    )
+
+
+def angle_diff(target, current):
+    return (target - current + math.pi) % (2 * math.pi) - math.pi
+
+
+def drive(pipuck, forward, steer):
+    left = max(-1000, min(1000, int(forward + steer)))
+    right = max(-1000, min(1000, int(forward - steer)))
+    pipuck.epuck.set_motor_speeds(left, right)
+
+
+def compute_avoid_vector(x, y, zones):
+    vx, vy = 0.0, 0.0
+    reasons = []
+
+    if out_of_bounds(x, y, BOUNDARY_MARGIN):
+        dx, dy = CENTER[0] - x, CENTER[1] - y
+        n = math.hypot(dx, dy) or 1.0
+        vx += 2.0 * dx / n
+        vy += 2.0 * dy / n
+        reasons.append("wall")
+
+    if hits_zone(x, y, zones, ZONE_MARGIN):
+        dx, dy = CENTER[0] - x, CENTER[1] - y
+        n = math.hypot(dx, dy) or 1.0
+        vx += dx / n
+        vy += dy / n
+        reasons.append("zone")
+
+    for rid, ox, oy in fresh_others():
+        d = math.hypot(x - ox, y - oy)
+        if d < OTHER_MARGIN:
+            dx, dy = x - ox, y - oy
+            n = d or 1.0
+            weight = max(1.0, OTHER_MARGIN / max(d, 0.05))
+            vx += weight * dx / n
+            vy += weight * dy / n
+            reasons.append(f"#{rid}@{d:.2f}")
+
+    if not reasons:
+        return None
+    if math.hypot(vx, vy) < 1e-3:
+        vx = CENTER[0] - x
+        vy = CENTER[1] - y
+    return (vx, vy, reasons)
+
+
+zones = load_zones()
+
 client = mqtt.Client()
 client.on_connect = on_connect
 client.on_message = on_message
+client.connect(BROKER, PORT, 60)
+client.loop_start()
 
-client.connect(Broker, Port, 60)
-
-client.loop_start() # Start listening loop in separate thread
-
-# Initialize the PiPuck
 pipuck = PiPuck(epuck_version=2)
 
-# Set the robot's speed, e.g. with
-pipuck.epuck.set_motor_speeds(1000,-1000)
+start = time.time()
+walk_state = "STRAIGHT"
+walk_until = start + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
+turn_steer = PIVOT_SPEED
+last_log = 0.0
 
-time.sleep(10)
+print("random walk started — Ctrl-C to stop")
 
-# Stop the MQTT client loop
-pipuck.epuck.set_motor_speeds(0,0)
-client.loop_stop()
+try:
+    while True:
+        now = time.time()
+        pose = get_pose()
+
+        if pose is None:
+            drive(pipuck, 0, 0)
+            if now - last_log >= LOG_INTERVAL:
+                last_log = now
+                print(f"[{now-start:6.1f}s] no fresh pose, waiting…")
+            time.sleep(TICK)
+            continue
+
+        x, y, theta = pose
+        ahead_x = x + LOOKAHEAD * math.cos(theta)
+        ahead_y = y + LOOKAHEAD * math.sin(theta)
+
+        avoid = compute_avoid_vector(x, y, zones) or compute_avoid_vector(ahead_x, ahead_y, zones)
+
+        if avoid is not None:
+            vx, vy, reasons = avoid
+            target = math.atan2(vy, vx)
+            diff = angle_diff(target, theta)
+            sign = 1 if diff > 0 else -1
+            abs_diff = abs(diff)
+            if abs_diff > PIVOT_THRESHOLD:
+                forward = 0
+                steer = sign * PIVOT_SPEED
+            elif abs_diff > STEER_DEAD:
+                forward = FORWARD_SPEED
+                steer = int(sign * STEER_DELTA * (abs_diff / PIVOT_THRESHOLD))
+            else:
+                forward = FORWARD_SPEED
+                steer = 0
+            mode = "AVOID(" + "/".join(reasons[:3]) + ")"
+            walk_state = "STRAIGHT"
+            walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
+        else:
+            if walk_state == "STRAIGHT":
+                forward = FORWARD_SPEED
+                steer = 0
+                if now >= walk_until:
+                    walk_state = "TURN"
+                    turn_steer = random.choice((-1, 1)) * PIVOT_SPEED
+                    walk_until = now + random.uniform(TURN_MIN, TURN_MAX)
+            else:
+                forward = 0
+                steer = turn_steer
+                if now >= walk_until:
+                    walk_state = "STRAIGHT"
+                    walk_until = now + random.uniform(STRAIGHT_MIN, STRAIGHT_MAX)
+            mode = walk_state
+
+        drive(pipuck, forward, steer)
+
+        if now - last_log >= LOG_INTERVAL:
+            last_log = now
+            theta_deg = math.degrees(theta) % 360
+            print(
+                f"[{now-start:6.1f}s] pos=({x:.2f},{y:.2f}) θ={theta_deg:5.1f}° "
+                f"mode={mode} fwd={forward} steer={steer:+d}"
+            )
+
+        time.sleep(TICK)
+
+except KeyboardInterrupt:
+    print("\nstopping (Ctrl-C)")
+finally:
+    pipuck.epuck.set_motor_speeds(0, 0)
+    client.loop_stop()
+    client.disconnect()
