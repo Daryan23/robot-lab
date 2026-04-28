@@ -4,7 +4,7 @@ import time
 from pipuck.pipuck import PiPuck
 
 # Define variables and callbacks
-Broker = "192.168.178.56"  # Replace with your broker address
+Broker = "192.168.178.43"  # Replace with your broker address
 Port = 1883 # standard MQTT port
 
 # function to handle connection
