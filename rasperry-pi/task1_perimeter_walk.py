@@ -9,22 +9,24 @@ Port = 1883
 
 ROBOT_ID = "26"
 
-MARGIN = 0.15  # distance from wall to follow
+MARGIN = 0.15
 
-# Waypoints: corners of the field inset by MARGIN, traversed clockwise
-# Field: x 0-2m, y 0-1m
 WAYPOINTS = [
-    (MARGIN,        MARGIN),        # bottom-left
-    (2.0 - MARGIN,  MARGIN),        # bottom-right
-    (2.0 - MARGIN,  1.0 - MARGIN),  # top-right
-    (MARGIN,        1.0 - MARGIN),  # top-left
+    (MARGIN,        MARGIN),
+    (2.0 - MARGIN,  MARGIN),
+    (2.0 - MARGIN,  1.0 - MARGIN),
+    (MARGIN,        1.0 - MARGIN),
 ]
 
-WAYPOINT_THRESHOLD = 0.08  # metres — how close counts as "reached"
+WAYPOINT_THRESHOLD = 0.08
+SPEED_BASE = 500
+SPEED_TURN = 400
+ANGLE_TOL  = 10  # degrees
 
-SPEED_BASE   = 500
-SPEED_TURN   = 400
-ANGLE_TOL    = 8   # degrees — start driving straight within this heading error
+# Camera angle convention:
+#   "math"    → 0° = right (+x), counter-clockwise positive  (atan2(dy, dx))
+#   "compass" → 0° = up   (+y), clockwise positive           (atan2(dx, dy))
+ANGLE_CONVENTION = "compass"
 
 robot_state = {"x": None, "y": None, "angle": None}
 
@@ -46,15 +48,23 @@ def on_message(client, userdata, msg):
         pass
 
 
+def target_heading(dx, dy):
+    if ANGLE_CONVENTION == "compass":
+        return math.degrees(math.atan2(dx, dy)) % 360
+    else:
+        return math.degrees(math.atan2(dy, dx)) % 360
+
+
 def angle_diff(target, current):
-    """Shortest signed difference in degrees: positive = turn left."""
+    """Signed shortest difference: positive = turn left/CCW."""
     diff = (target - current + 180) % 360 - 180
+    if ANGLE_CONVENTION == "compass":
+        diff = -diff  # compass is CW, so flip sign for motor logic
     return diff
 
 
-def drive_to_waypoint(pipuck, wx, wy):
-    """Block until the robot reaches (wx, wy). Returns False if position lost."""
-    print(f"Heading to waypoint ({wx:.2f}, {wy:.2f})")
+def drive_to(pipuck, wx, wy, label=""):
+    print(f"→ waypoint {label}({wx:.2f}, {wy:.2f})")
     while True:
         x, y, angle = robot_state["x"], robot_state["y"], robot_state["angle"]
         if x is None:
@@ -67,26 +77,31 @@ def drive_to_waypoint(pipuck, wx, wy):
 
         if dist < WAYPOINT_THRESHOLD:
             print(f"  reached ({x:.2f}, {y:.2f})")
-            return True
+            pipuck.epuck.set_motor_speeds(0, 0)
+            return
 
-        # Target heading: camera uses standard math angle (0° = right, CCW positive)
-        # Adjust if your robot's angle convention differs
-        target_angle = math.degrees(math.atan2(dy, dx))
-        err = angle_diff(target_angle, angle)
+        hdg = target_heading(dx, dy)
+        err = angle_diff(hdg, angle)
 
         if abs(err) > ANGLE_TOL:
-            # Turn toward target
             if err > 0:
                 pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
             else:
                 pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
         else:
-            # Drive forward, slight correction
             correction = int(err * 3)
-            pipuck.epuck.set_motor_speeds(SPEED_BASE - correction, SPEED_BASE + correction)
+            pipuck.epuck.set_motor_speeds(
+                SPEED_BASE - correction,
+                SPEED_BASE + correction,
+            )
 
-        print(f"  pos=({x:.2f},{y:.2f}) dist={dist:.2f} err={err:.1f}°")
+        print(f"  pos=({x:.2f},{y:.2f}) dist={dist:.2f} hdg={hdg:.0f}° robot={angle:.0f}° err={err:.1f}°")
         time.sleep(0.05)
+
+
+def nearest_waypoint_index():
+    x, y = robot_state["x"], robot_state["y"]
+    return min(range(len(WAYPOINTS)), key=lambda i: math.hypot(WAYPOINTS[i][0] - x, WAYPOINTS[i][1] - y))
 
 
 def main():
@@ -96,19 +111,23 @@ def main():
     mqtt_client.connect(Broker, Port, 60)
     mqtt_client.loop_start()
 
-    print("Waiting for first position fix...")
+    print("Waiting for position fix...")
     while robot_state["x"] is None:
         time.sleep(0.1)
-    print(f"Got position: ({robot_state['x']:.2f}, {robot_state['y']:.2f})")
+    print(f"Position: ({robot_state['x']:.2f}, {robot_state['y']:.2f})")
 
     pipuck = PiPuck(epuck_version=2)
 
     try:
-        idx = 0
+        start_idx = nearest_waypoint_index()
+        print(f"Nearest corner: {WAYPOINTS[start_idx]}, starting perimeter walk from there.")
+
+        idx = start_idx
         while True:
             wx, wy = WAYPOINTS[idx % len(WAYPOINTS)]
-            drive_to_waypoint(pipuck, wx, wy)
+            drive_to(pipuck, wx, wy, label=f"#{idx % len(WAYPOINTS)} ")
             idx += 1
+
     except KeyboardInterrupt:
         print("Stopped.")
     finally:
