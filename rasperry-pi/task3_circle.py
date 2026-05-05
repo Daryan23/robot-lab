@@ -9,15 +9,13 @@ Port = 1883
 
 MY_ID = "26"
 
-CIRCLE_RADIUS = 0.30   # how far from the target to orbit (metres)
+CIRCLE_RADIUS = 0.20   # how far from the target to orbit (metres)
 APPROACH_TOL  = 0.05   # acceptable radius error before switching to orbit
 DIRECTION     = 1      # +1 = counter-clockwise, -1 = clockwise
 
-SPEED_BASE          = 500
-SPEED_TURN          = 400
-ANGLE_START_DRIVING = 30
-ANGLE_STOP_DRIVING  = 50
-STALE_S             = 1.5
+SPEED_BASE = 450       # forward speed when going around the circle
+STEER_GAIN = 8         # proportional gain on heading error (motor units per degree)
+STALE_S    = 1.5
 
 robots_state = {}
 
@@ -126,13 +124,15 @@ def main():
             mode = "orbit" if abs(radial_err) < APPROACH_TOL else ("approach" if radial_err > 0 else "back-off")
             print(f"center=({tx:.2f},{ty:.2f}) dist={r_mag:.2f} radial_err={radial_err:+.2f} mode={mode} err={err:+.0f}°")
 
-            if abs(err) > ANGLE_STOP_DRIVING:
-                if err > 0:
-                    pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
-                else:
-                    pipuck.epuck.set_motor_speeds(-SPEED_TURN, SPEED_TURN)
-            elif abs(err) < ANGLE_START_DRIVING:
-                pipuck.epuck.set_motor_speeds(SPEED_BASE, SPEED_BASE)
+            # Smooth proportional steering: positive err = need to turn CW
+            # (right wheel slower). Always drive forward, just bias the wheels.
+            steer = STEER_GAIN * err
+            left  = SPEED_BASE + steer
+            right = SPEED_BASE - steer
+            # Clamp to reasonable motor range
+            left  = max(-SPEED_BASE, min(SPEED_BASE * 2, left))
+            right = max(-SPEED_BASE, min(SPEED_BASE * 2, right))
+            pipuck.epuck.set_motor_speeds(int(left), int(right))
 
             time.sleep(0.05)
 
