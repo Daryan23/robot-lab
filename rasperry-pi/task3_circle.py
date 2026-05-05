@@ -10,7 +10,7 @@ Port = 1883
 
 MY_ID = "26"
 
-CIRCLE_RADIUS = 0.20   # how far from the target to orbit (metres)
+CIRCLE_RADIUS = 0.05   # how far from the target to orbit (metres)
 APPROACH_TOL  = 0.05   # acceptable radius error before switching to orbit
 DIRECTION     = 1      # +1 = counter-clockwise, -1 = clockwise
 
