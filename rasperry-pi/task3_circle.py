@@ -2,6 +2,7 @@ import paho.mqtt.client as mqtt
 import json
 import time
 import math
+import random
 from pipuck.pipuck import PiPuck
 
 Broker = "192.168.178.43"
@@ -44,19 +45,15 @@ def angle_diff(target, current):
     return (target - current + 180) % 360 - 180
 
 
-def closest_other(mx, my):
-    """Return (id, x, y, dist) of the closest fresh robot that isn't us."""
+def random_other():
+    """Return (id, x, y) of a random fresh robot that isn't us, or None."""
     now = time.time()
-    best = None
-    for rid, st in robots_state.items():
-        if rid == MY_ID:
-            continue
-        if now - st["ts"] > STALE_S:
-            continue
-        d = math.hypot(st["x"] - mx, st["y"] - my)
-        if best is None or d < best[3]:
-            best = (rid, st["x"], st["y"], d)
-    return best
+    candidates = [
+        (rid, st["x"], st["y"])
+        for rid, st in robots_state.items()
+        if rid != MY_ID and now - st["ts"] <= STALE_S
+    ]
+    return random.choice(candidates) if candidates else None
 
 
 def main():
@@ -72,15 +69,14 @@ def main():
     me = robots_state[MY_ID]
     print(f"Got position: ({me['x']:.2f}, {me['y']:.2f})")
 
-    # Lock target ONCE: find closest other robot now, remember its coordinates
-    print("Looking for closest other robot...")
+    # Lock target ONCE: pick a random other robot, remember its coordinates
+    print("Picking a random other robot...")
     target = None
     while target is None:
-        target = closest_other(me["x"], me["y"])
+        target = random_other()
         if target is None:
             time.sleep(0.1)
-            me = robots_state.get(MY_ID, me)
-    tid, tx, ty, _ = target
+    tid, tx, ty = target
     print(f"Locked target {tid} at fixed coords ({tx:.2f}, {ty:.2f}). Orbiting forever.")
 
     pipuck = PiPuck(epuck_version=2)
