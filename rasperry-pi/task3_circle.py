@@ -74,6 +74,17 @@ def main():
     me = robots_state[MY_ID]
     print(f"Got position: ({me['x']:.2f}, {me['y']:.2f})")
 
+    # Lock target ONCE: find closest other robot now, remember its coordinates
+    print("Looking for closest other robot...")
+    target = None
+    while target is None:
+        target = closest_other(me["x"], me["y"])
+        if target is None:
+            time.sleep(0.1)
+            me = robots_state.get(MY_ID, me)
+    tid, tx, ty, _ = target
+    print(f"Locked target {tid} at fixed coords ({tx:.2f}, {ty:.2f}). Orbiting forever.")
+
     pipuck = PiPuck(epuck_version=2)
 
     try:
@@ -83,15 +94,6 @@ def main():
                 time.sleep(0.05)
                 continue
             mx, my, ma = me["x"], me["y"], me["angle"]
-
-            target = closest_other(mx, my)
-            if target is None:
-                print("No other robots visible, searching...")
-                pipuck.epuck.set_motor_speeds(SPEED_TURN, -SPEED_TURN)
-                time.sleep(0.1)
-                continue
-
-            tid, tx, ty, dist = target
 
             # Vector from target to me
             rx, ry = mx - tx, my - ty
@@ -122,7 +124,7 @@ def main():
             err = angle_diff(hdg, ma)
 
             mode = "orbit" if abs(radial_err) < APPROACH_TOL else ("approach" if radial_err > 0 else "back-off")
-            print(f"target={tid} dist={r_mag:.2f} radial_err={radial_err:+.2f} mode={mode} err={err:+.0f}°")
+            print(f"center=({tx:.2f},{ty:.2f}) dist={r_mag:.2f} radial_err={radial_err:+.2f} mode={mode} err={err:+.0f}°")
 
             if abs(err) > ANGLE_STOP_DRIVING:
                 if err > 0:
