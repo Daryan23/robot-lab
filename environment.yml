@@ -1,0 +1,9 @@
+name: robot-lab
+channels:
+  - conda-forge
+dependencies:
+  - python=3.10
+  - pybullet
+  - gymnasium
+  - numpy
+  - pytest
