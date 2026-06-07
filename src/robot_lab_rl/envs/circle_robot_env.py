@@ -128,10 +128,14 @@ class CircleRobotEnv(gym.Env):
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
+        self._before_build_world()
         self._connect()
         self._build_world()
         self.step_count = 0
         return self._get_observation(), {}
+
+    def _before_build_world(self) -> None:
+        """Hook for subclasses to sample per-episode layout before bodies spawn."""
 
     def step(self, action):
         if not self.robot_ids:
@@ -335,7 +339,7 @@ class CircleRobotEnv(gym.Env):
         for robot_index, (robot_x, robot_y, _) in enumerate(self.robot_states):
             robot_vx, robot_vy = self.robot_velocities[robot_index]
             for obj in self.dynamic_objects:
-                self._resolve_robot_object_collision(robot_x, robot_y, robot_vx, robot_vy, obj)
+                self._resolve_robot_object_collision(robot_index, robot_x, robot_y, robot_vx, robot_vy, obj)
 
         for _ in range(2):
             for index, obj_a in enumerate(self.dynamic_objects):
@@ -358,6 +362,7 @@ class CircleRobotEnv(gym.Env):
 
     def _resolve_robot_object_collision(
         self,
+        robot_index: int,
         robot_x: float,
         robot_y: float,
         robot_vx: float,
@@ -384,7 +389,10 @@ class CircleRobotEnv(gym.Env):
         push_velocity = robot_vx * (-normal_x) + robot_vy * (-normal_y)
         if push_velocity > 0.0:
             normal_velocity = obj.vx * (-normal_x) + obj.vy * (-normal_y)
-            target_normal_velocity = min(push_velocity * 0.9, math.hypot(robot_vx, robot_vy))
+            target_normal_velocity = min(
+                push_velocity * 0.9 * self._object_push_scale(obj, robot_index),
+                math.hypot(robot_vx, robot_vy),
+            )
             delta_normal_velocity = max(0.0, target_normal_velocity - normal_velocity)
             delta_vx = -normal_x * delta_normal_velocity
             delta_vy = -normal_y * delta_normal_velocity
@@ -543,6 +551,10 @@ class CircleRobotEnv(gym.Env):
             scale = allowed_speed / speed
             obj.vx *= scale
             obj.vy *= scale
+
+    def _object_push_scale(self, obj: DynamicObject2D, robot_index: int) -> float:
+        del obj, robot_index
+        return 1.0
 
     @staticmethod
     def _cross_2d(ax: float, ay: float, bx: float, by: float) -> float:

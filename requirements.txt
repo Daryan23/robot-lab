@@ -1,4 +1,7 @@
-gymnasium==1.2.2
+gymnasium==1.2.3
 numpy==2.2.6
 pybullet==3.2.7
 pytest==9.0.2
+setuptools<81
+stable-baselines3==2.7.0
+tensorboard==2.20.0

@@ -1,10 +1,16 @@
 README.md
 pyproject.toml
 src/robot_lab_rl/__init__.py
+src/robot_lab_rl/expert.py
+src/robot_lab_rl/rl.py
 src/robot_lab_rl.egg-info/PKG-INFO
 src/robot_lab_rl.egg-info/SOURCES.txt
 src/robot_lab_rl.egg-info/dependency_links.txt
 src/robot_lab_rl.egg-info/top_level.txt
 src/robot_lab_rl/envs/__init__.py
+src/robot_lab_rl/envs/box_push_env.py
 src/robot_lab_rl/envs/circle_robot_env.py
+tests/test_box_push_env.py
 tests/test_differential_drive.py
+tests/test_expert_and_bc.py
+tests/test_rl_helpers.py

@@ -4,7 +4,7 @@ import tkinter as tk
 
 import numpy as np
 
-from robot_lab_rl import CircleRobotEnv
+from robot_lab_rl import BoxPushEnv, CircleRobotEnv
 
 
 DEFAULT_SPEED_SCALE = 1.0
@@ -89,6 +89,7 @@ class ManualDriveApp:
         self.speed_slider.pack(fill=tk.X)
 
         self.keys: dict[str, bool] = {}
+        self.zone_item: int | None = None
         self.object_items: list[int] = []
         self.robot_items: list[dict[str, int]] = []
         self.coordinate_key_items: dict[str, int] = {}
@@ -104,6 +105,7 @@ class ManualDriveApp:
         self.canvas.focus_set()
 
         self._draw_arena()
+        self._create_zone_item()
         self._create_object_items()
         self._create_coordinate_key()
         self._create_robot_items()
@@ -129,6 +131,7 @@ class ManualDriveApp:
 
         actions = self._read_keyboard_actions()
         self.env.step(actions)
+        self._draw_zone()
         self._draw_objects()
         self._draw_robots()
         self._draw_coordinate_key()
@@ -159,6 +162,36 @@ class ManualDriveApp:
             )
 
         return actions
+
+    def _create_zone_item(self) -> None:
+        if not hasattr(self.env, "zone_position"):
+            return
+        self.zone_item = self.canvas.create_rectangle(
+            0,
+            0,
+            0,
+            0,
+            fill="#5fd36f",
+            outline="#116b21",
+            width=3,
+            stipple="gray25",
+        )
+        self._draw_zone()
+
+    def _draw_zone(self) -> None:
+        if self.zone_item is None or not hasattr(self.env, "zone_position"):
+            return
+        zone_x, zone_y = self.env.zone_position
+        screen_x, screen_y = self._world_to_screen(zone_x, zone_y)
+        half_width_px = self.env.zone_half_width * self.scale
+        half_height_px = self.env.zone_half_height * self.scale
+        self.canvas.coords(
+            self.zone_item,
+            screen_x - half_width_px,
+            screen_y - half_height_px,
+            screen_x + half_width_px,
+            screen_y + half_height_px,
+        )
 
     def _create_object_items(self) -> None:
         for obj in self.env.dynamic_objects:
@@ -372,13 +405,23 @@ class ManualDriveApp:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Manually drive abstract Pi-pucks in pure 2D.")
-    parser.add_argument("--robots", type=int, default=2, help="Number of circular robots to spawn.")
+    parser.add_argument(
+        "--task",
+        choices=["sandbox", "box-push"],
+        default="sandbox",
+        help="Manual sandbox mode or the simple box-to-zone task.",
+    )
+    parser.add_argument("--robots", type=int, default=2, help="Number of circular robots in sandbox mode.")
     args = parser.parse_args()
 
-    env = CircleRobotEnv(render_mode="direct", num_robots=args.robots, max_steps=10_000_000)
+    if args.task == "box-push":
+        env = BoxPushEnv(render_mode="direct", max_steps=10_000_000)
+    else:
+        env = CircleRobotEnv(render_mode="direct", num_robots=args.robots, max_steps=10_000_000)
     observation, _ = env.reset()
 
     print("Manual 2D drive started.")
+    print(f"Task: {args.task}")
     print("P0: I/K forward/backward, J/L turn.")
     print("P1: arrow up/down forward/backward, arrow left/right turn.")
     print("Speed: use the slider below the canvas.")
