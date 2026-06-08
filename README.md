@@ -428,6 +428,86 @@ To watch a specific checkpoint:
   --model models/box_push_ppo/box_push_ppo_10000_steps.zip
 ```
 
+## Decentralized Shared Policy (Residual Expert)
+
+This is the recommended setup for the cooperative box-push task. Instead of one
+central network that sees everything and controls both robots, a single shared
+network is called **once per robot** with that robot's own egocentric (local,
+relative) observation. Execution stays decentralized and the same network scales
+to `n > 2` robots unchanged.
+
+On top of that, the policy runs in **Residual Policy Learning** mode: it does not
+imitate the geometric expert, it *starts as* the expert and only learns a small
+correction:
+
+```text
+final_action = expert_action + residual_scale * policy_correction
+```
+
+Because the expert already solves the task, an untrained residual policy already
+performs at expert level (measured: `full` solved 10/10 untrained with
+`--residual-scale 0.3`). PPO then only refines it and adds robustness to
+randomized spawns. No behavior-cloning warm-start is needed in this mode.
+
+### Reproduce the working policy
+
+Train (residual mode, robust to random box/robot/zone positions):
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/train_shared_ppo.py \
+  --difficulty full \
+  --timesteps 1000000 \
+  --randomization 0.15 \
+  --residual-scale 0.3
+```
+
+Watch it (the `--residual-scale` MUST match the value used for training):
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/watch_shared_policy.py \
+  --model models/box_push_shared_ppo/box_push_shared_ppo_full_final.zip \
+  --difficulty full \
+  --randomization 0.15 \
+  --residual-scale 0.3
+```
+
+Spawn the box at random / different positions in the viewer:
+
+- `--randomization 0.15` jitters box, robots, and zone around the chosen layout
+  every episode.
+- `--difficulty coop_random` re-samples a full random layout (box size, mass,
+  position, angle, and zone) every episode.
+
+### Optional: curriculum and behavior-cloning warm-start
+
+Train through easier stages first, carrying the model forward:
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/train_shared_ppo.py \
+  --curriculum easy medium full \
+  --timesteps 1500000 \
+  --residual-scale 0.3
+```
+
+Or, instead of residual mode, behavior-clone the shared policy from the expert
+and warm-start PPO from it:
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/pretrain_shared_bc.py \
+  --difficulties easy medium full --epochs 60
+"$PWD/.conda-env/bin/python" scripts/train_shared_ppo.py \
+  --difficulty full --timesteps 1000000 \
+  --pretrained-model models/box_push_shared_ppo/shared_bc_pretrained.zip
+```
+
+Models are saved under `models/box_push_shared_ppo/` and TensorBoard logs under
+`runs/box_push_shared_ppo/` (both are git-ignored; regenerate with the commands
+above). The key reproduction detail is that residual models only behave
+correctly when loaded with the same `--residual-scale` they were trained with.
+
+> Note: on macOS you may hit `OMP: Error #15` from duplicate OpenMP runtimes.
+> If so, prefix the commands above with `KMP_DUPLICATE_LIB_OK=TRUE`.
+
 ## Optional PyBullet GUI Demo
 
 The project still supports opening PyBullet's GUI for debugging:
@@ -467,6 +547,10 @@ Current tests check:
 - `src/robot_lab_rl/envs/box_push_env.py`: simple 2-robot, 1-box, 1-zone RL task.
 - `src/robot_lab_rl/expert.py`: scripted heuristic prior for demonstrations.
 - `src/robot_lab_rl/rl.py`: Stable-Baselines3 wrappers and checkpoint helpers.
+- `src/robot_lab_rl/decentralized.py`: egocentric observation, shared parameter-sharing VecEnv, expert demo collection, and Residual Policy Learning.
+- `scripts/train_shared_ppo.py`: decentralized shared-policy PPO (residual, curriculum, BC warm-start).
+- `scripts/pretrain_shared_bc.py`: behavior-clone the shared policy from the expert.
+- `scripts/watch_shared_policy.py`: residual-aware viewer for the shared policy.
 - `scripts/manual_drive.py`: pure 2D manual-driving sandbox.
 - `scripts/run_random_policy.py`: random-action simulation runner.
 - `scripts/collect_box_push_demos.py`: expert demonstration collection.
