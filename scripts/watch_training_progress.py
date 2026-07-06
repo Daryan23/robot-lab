@@ -4,9 +4,13 @@ from pathlib import Path
 
 from stable_baselines3 import PPO
 
-from robot_lab_rl import BoxPushEnv
 from robot_lab_rl.envs.box_push_env import DIFFICULTIES
-from robot_lab_rl.rl import DEFAULT_MODEL_DIR, FlatActionWrapper
+from robot_lab_rl.rl import (
+    DEFAULT_MODEL_DIR,
+    DEFAULT_RESIDUAL_SCALE,
+    FlatActionWrapper,
+    make_box_push_env,
+)
 try:
     from manual_drive import ManualDriveApp, UPDATE_MS
 except ModuleNotFoundError:
@@ -164,15 +168,20 @@ def main() -> None:
     )
     parser.add_argument("--reload-seconds", type=float, default=5.0)
     parser.add_argument("--stochastic", action="store_true", help="Use stochastic actions instead of deterministic ones.")
+    parser.add_argument(
+        "--residual",
+        action="store_true",
+        help="Watch residual checkpoints (scripted expert stays in the loop, policy only corrects).",
+    )
+    parser.add_argument("--residual-scale", type=float, default=DEFAULT_RESIDUAL_SCALE)
     args = parser.parse_args()
 
-    env = FlatActionWrapper(
-        BoxPushEnv(
-            render_mode="direct",
-            difficulty=args.difficulty,
-            max_steps=args.max_episode_steps,
-            randomization=args.randomization,
-        )
+    env = make_box_push_env(
+        difficulty=args.difficulty,
+        max_steps=args.max_episode_steps,
+        randomization=args.randomization,
+        residual=args.residual,
+        residual_scale=args.residual_scale,
     )
     app = TrainingProgressApp(
         env,

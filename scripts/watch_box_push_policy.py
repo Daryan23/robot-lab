@@ -4,9 +4,13 @@ from pathlib import Path
 
 from stable_baselines3 import PPO
 
-from robot_lab_rl import BoxPushEnv
 from robot_lab_rl.envs.box_push_env import DIFFICULTIES
-from robot_lab_rl.rl import FlatActionWrapper, latest_checkpoint
+from robot_lab_rl.rl import (
+    DEFAULT_RESIDUAL_SCALE,
+    FlatActionWrapper,
+    latest_checkpoint,
+    make_box_push_env,
+)
 try:
     from manual_drive import ManualDriveApp, UPDATE_MS
 except ModuleNotFoundError:
@@ -48,11 +52,20 @@ def main() -> None:
     parser.add_argument("--difficulty", choices=DIFFICULTIES, default="full")
     parser.add_argument("--max-episode-steps", type=int, default=800)
     parser.add_argument("--stochastic", action="store_true", help="Use stochastic actions instead of deterministic ones.")
+    parser.add_argument(
+        "--residual",
+        action="store_true",
+        help="Watch a residual policy (scripted expert stays in the loop, policy only corrects).",
+    )
+    parser.add_argument("--residual-scale", type=float, default=DEFAULT_RESIDUAL_SCALE)
     args = parser.parse_args()
 
     model_path = args.model or latest_checkpoint()
-    env = FlatActionWrapper(
-        BoxPushEnv(render_mode="direct", difficulty=args.difficulty, max_steps=args.max_episode_steps)
+    env = make_box_push_env(
+        difficulty=args.difficulty,
+        max_steps=args.max_episode_steps,
+        residual=args.residual,
+        residual_scale=args.residual_scale,
     )
     model = PPO.load(model_path)
     print(f"Watching model: {model_path}")

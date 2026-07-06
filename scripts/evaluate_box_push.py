@@ -5,7 +5,7 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from robot_lab_rl.envs.box_push_env import DIFFICULTIES
-from robot_lab_rl.rl import latest_checkpoint, make_box_push_env
+from robot_lab_rl.rl import DEFAULT_RESIDUAL_SCALE, latest_checkpoint, make_box_push_env
 
 
 COOP_DIFFICULTIES = ("coop_heavy", "coop_rotate", "coop_mixed")
@@ -18,11 +18,15 @@ def evaluate_one(
     episodes: int,
     max_episode_steps: int,
     randomization: float,
+    residual: bool = False,
+    residual_scale: float = DEFAULT_RESIDUAL_SCALE,
 ) -> dict[str, float]:
     env = make_box_push_env(
         difficulty=difficulty,
         max_steps=max_episode_steps,
         randomization=randomization,
+        residual=residual,
+        residual_scale=residual_scale,
     )
     successes = 0
     returns: list[float] = []
@@ -85,6 +89,12 @@ def main() -> None:
         default=0.0,
         help="Position jitter in meters for robots/box/zone on each reset.",
     )
+    parser.add_argument(
+        "--residual",
+        action="store_true",
+        help="Evaluate a residual policy (scripted expert stays in the loop, policy only corrects).",
+    )
+    parser.add_argument("--residual-scale", type=float, default=DEFAULT_RESIDUAL_SCALE)
     args = parser.parse_args()
 
     model_path = args.model or latest_checkpoint()
@@ -101,7 +111,15 @@ def main() -> None:
         difficulties = (args.difficulty,)
 
     results = [
-        evaluate_one(model, difficulty, args.episodes, args.max_episode_steps, args.randomization)
+        evaluate_one(
+            model,
+            difficulty,
+            args.episodes,
+            args.max_episode_steps,
+            args.randomization,
+            residual=args.residual,
+            residual_scale=args.residual_scale,
+        )
         for difficulty in difficulties
     ]
     for difficulty, result in zip(difficulties, results):

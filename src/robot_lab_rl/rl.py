@@ -3,14 +3,16 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+import gymnasium as gym
 import numpy as np
 from gymnasium import ActionWrapper, spaces
 
-from robot_lab_rl import BoxPushEnv
+from robot_lab_rl import BoxPushEnv, BoxPushHeuristicPolicy
 
 
 DEFAULT_MODEL_DIR = Path("models/box_push_ppo")
 DEFAULT_LOG_DIR = Path("runs/box_push_ppo")
+DEFAULT_RESIDUAL_SCALE = 0.3
 
 
 class FlatActionWrapper(ActionWrapper):
@@ -26,12 +28,74 @@ class FlatActionWrapper(ActionWrapper):
         return normalized_action * self.max_wheel_speed
 
 
+class ResidualActionWrapper(gym.Wrapper):
+    """Keep the scripted expert in the control loop; the policy only corrects it.
+
+    The executed (normalized) action is::
+
+        action = clip(expert(obs) + residual_scale * policy_residual, -1, 1)
+
+    A zero policy output therefore reproduces the hard-coded expert exactly, so
+    the network only has to learn *corrections*. ``residual_scale`` bounds how
+    far the policy may pull the action away from the expert, which keeps the
+    hand-written controller dominant.
+
+    The per-step ``info`` dict is augmented with the expert action, the raw
+    residual, the applied correction and its magnitude/saturation so training
+    and evaluation can visualise what the network is changing.
+    """
+
+    def __init__(
+        self,
+        env: FlatActionWrapper,
+        expert: BoxPushHeuristicPolicy | None = None,
+        residual_scale: float = DEFAULT_RESIDUAL_SCALE,
+    ) -> None:
+        super().__init__(env)
+        if residual_scale <= 0.0:
+            raise ValueError("residual_scale must be positive.")
+        self.expert = expert or BoxPushHeuristicPolicy()
+        self.residual_scale = float(residual_scale)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        self._last_observation: np.ndarray | None = None
+
+    def reset(self, *, seed: int | None = None, options: dict | None = None):
+        observation, info = self.env.reset(seed=seed, options=options)
+        self._last_observation = np.asarray(observation, dtype=np.float32)
+        return observation, info
+
+    def step(self, residual):
+        if self._last_observation is None:
+            raise RuntimeError("Call reset() before step().")
+        residual = np.asarray(residual, dtype=np.float32).reshape(4)
+        expert_action = np.asarray(
+            self.expert.predict(self._last_observation), dtype=np.float32
+        ).reshape(4)
+        correction = self.residual_scale * residual
+        composed = np.clip(expert_action + correction, -1.0, 1.0).astype(np.float32)
+        observation, reward, terminated, truncated, info = self.env.step(composed)
+        self._last_observation = np.asarray(observation, dtype=np.float32)
+        info = {
+            **info,
+            "expert_action": expert_action,
+            "residual_action": residual,
+            "applied_correction": correction,
+            "composed_action": composed,
+            "correction_magnitude": float(np.mean(np.abs(correction))),
+            "correction_saturation": float(np.mean(np.abs(composed) >= 0.999)),
+        }
+        return observation, reward, terminated, truncated, info
+
+
 def make_box_push_env(
     difficulty: str = "full",
     max_steps: int = 800,
     randomization: float = 0.0,
-) -> FlatActionWrapper:
-    return FlatActionWrapper(
+    residual: bool = False,
+    residual_scale: float = DEFAULT_RESIDUAL_SCALE,
+    expert: BoxPushHeuristicPolicy | None = None,
+):
+    env = FlatActionWrapper(
         BoxPushEnv(
             render_mode="direct",
             difficulty=difficulty,
@@ -39,6 +103,25 @@ def make_box_push_env(
             randomization=randomization,
         )
     )
+    if residual:
+        return ResidualActionWrapper(env, expert=expert, residual_scale=residual_scale)
+    return env
+
+
+def zero_init_residual_policy(model, log_std_init: float | None = None) -> None:
+    """Make a fresh policy start as a no-op correction (action ≈ expert).
+
+    Zeroing the action mean head means the initial residual is ~0, so the
+    residual policy begins at expert performance instead of from a random
+    policy. Optionally lower the action log-std for gentler initial exploration.
+    """
+    import torch
+
+    with torch.no_grad():
+        model.policy.action_net.weight.zero_()
+        model.policy.action_net.bias.zero_()
+        if log_std_init is not None:
+            model.policy.log_std.fill_(float(log_std_init))
 
 
 def latest_checkpoint(model_dir: Path = DEFAULT_MODEL_DIR) -> Path:

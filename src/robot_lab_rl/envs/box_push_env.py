@@ -260,25 +260,28 @@ class BoxPushEnv(CircleRobotEnv):
         if current_distance < self.best_box_zone_distance - 0.01:
             self.best_box_zone_distance = min(self.best_box_zone_distance, current_distance)
 
-        reward = (
-            box_progress * 120.0
-            + approach_progress * 12.0
-            + robot_box_progress * 5.0
-            + max(0.0, box_velocity_to_zone) * 0.5
-            + heading_alignment * 0.001
-            + behind_box_quality * 0.002
-            + contact_quality * 0.01
-            + max(0.0, orientation_progress) * (50.0 if self.orientation_tolerance is not None else 8.0)
-            + complementary_contact * (0.03 if self.layout.requires_cooperation else 0.008)
-            + contact_balance * (0.02 if self.layout.requires_cooperation else 0.004)
-            + (0.05 if both_robot_contact else 0.0)
-            - 0.01
-            - action_penalty
-            - backward_box_penalty
-            - current_max_robot_box_distance * 0.002
-        )
+        reward_terms = {
+            "box_progress": box_progress * 120.0,
+            "approach_progress": approach_progress * 12.0,
+            "robot_box_progress": robot_box_progress * 5.0,
+            "box_velocity_to_zone": max(0.0, box_velocity_to_zone) * 0.5,
+            "heading_alignment": heading_alignment * 0.001,
+            "behind_box_quality": behind_box_quality * 0.002,
+            "contact_quality": contact_quality * 0.01,
+            "orientation_progress": max(0.0, orientation_progress)
+            * (50.0 if self.orientation_tolerance is not None else 8.0),
+            "complementary_contact": complementary_contact
+            * (0.03 if self.layout.requires_cooperation else 0.008),
+            "contact_balance": contact_balance
+            * (0.02 if self.layout.requires_cooperation else 0.004),
+            "both_robot_contact": 0.05 if both_robot_contact else 0.0,
+            "time_penalty": -0.01,
+            "action_penalty": -action_penalty,
+            "backward_box_penalty": -backward_box_penalty,
+            "spread_penalty": -current_max_robot_box_distance * 0.002,
+        }
         if self.layout.requires_cooperation and contact_balance < 0.2:
-            reward -= 0.015
+            reward_terms["contact_balance_penalty"] = -0.015
         terminated = self.box_in_zone()
         no_progress_limit = {
             "easy": 360,
@@ -293,11 +296,12 @@ class BoxPushEnv(CircleRobotEnv):
         truncated = truncated or (no_progress and not terminated)
         if terminated:
             remaining_episode_fraction = 1.0 - self.step_count / max(self.max_steps, 1)
-            reward += 80.0 + 20.0 * remaining_episode_fraction
+            reward_terms["success_bonus"] = 80.0 + 20.0 * remaining_episode_fraction
         elif no_progress:
-            reward -= 8.0
+            reward_terms["stall_penalty"] = -8.0
         elif truncated:
-            reward -= 15.0
+            reward_terms["timeout_penalty"] = -15.0
+        reward = float(sum(reward_terms.values()))
 
         info = {
             **info,
@@ -323,6 +327,7 @@ class BoxPushEnv(CircleRobotEnv):
             "contact_balance": contact_balance,
             "useful_progress": useful_progress,
             "no_progress": no_progress,
+            "reward_terms": reward_terms,
         }
         self.previous_box_zone_distance = current_distance
         self.previous_orientation_error = self.orientation_error()
