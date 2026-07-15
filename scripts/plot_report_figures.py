@@ -47,6 +47,26 @@ ACCENT = "#10b981"    # green
 MUTED = "#9ca3af"     # gray
 
 
+def save_table(path, header, rows) -> None:
+    """Write a whitespace-separated data table for LaTeX/pgfplots.
+
+    ``header`` is a list of column names, ``rows`` an iterable of equal-length
+    rows. Read it in LaTeX with ``\\addplot table[x=..., y=...] {file.dat};``.
+    """
+    cols = list(header)
+    with open(path, "w") as fh:
+        fh.write(" ".join(cols) + "\n")
+        for row in rows:
+            fh.write(" ".join(_fmt(v) for v in row) + "\n")
+    print(f"Saved {path}")
+
+
+def _fmt(value) -> str:
+    if isinstance(value, float):
+        return "nan" if np.isnan(value) else f"{value:.6g}"
+    return str(value)
+
+
 def apply_style() -> None:
     plt.rcParams.update(
         {
@@ -131,6 +151,7 @@ def figure_trajectory(args, figures_dir):
 
     cmap = plt.get_cmap("viridis")
     n_episodes = args.trajectory_episodes
+    traj_rows = []  # (episode, step, x, y) for LaTeX export
     for ep in range(n_episodes):
         env.reset()
         zx, zy = env.zone_position
@@ -149,6 +170,8 @@ def figure_trajectory(args, figures_dir):
             if env.box_in_zone():
                 break
         path = np.array(path)
+        for step, (px, py) in enumerate(path):
+            traj_rows.append((ep, step, px, py))
         color = cmap(ep / max(1, n_episodes - 1))
         ax.plot(path[:, 0], path[:, 1], color=color, alpha=0.9, linewidth=2.2,
                 label="box path" if ep == 0 else None)
@@ -173,6 +196,7 @@ def figure_trajectory(args, figures_dir):
     fig.savefig(path_out)
     plt.close(fig)
     print(f"Saved {path_out}")
+    save_table(figures_dir / "fig_trajectory.dat", ["episode", "step", "x", "y"], traj_rows)
 
 
 # --- figure: success vs randomization ---------------------------------------
@@ -207,6 +231,16 @@ def figure_success_vs_random(args, figures_dir):
     fig.savefig(path_out)
     plt.close(fig)
     print(f"Saved {path_out}")
+
+    labels = list(series.keys())
+    rows = [
+        [randomizations[i]] + [series[label][0][i] for label in labels]
+        for i in range(len(randomizations))
+    ]
+    header = ["randomization"] + [
+        label.replace(" ", "_").replace("(", "").replace(")", "") for label in labels
+    ]
+    save_table(figures_dir / "fig_success_vs_random.dat", header, rows)
 
 
 # --- figure: learning curve + reward curve ----------------------------------
@@ -268,6 +302,12 @@ def figure_curves(args, figures_dir):
     ax.legend(loc="upper left")
     p1 = figures_dir / "fig_learning_curve.png"
     fig.savefig(p1); plt.close(fig); print(f"Saved {p1}")
+    smoothed_success = smooth(cb.success)
+    save_table(
+        figures_dir / "fig_learning_curve.dat",
+        ["timesteps", "success_raw", "success_smoothed"],
+        zip(cb.timesteps, cb.success, smoothed_success),
+    )
 
     # reward curve
     ts = [t for t, r in zip(cb.timesteps, cb.reward) if not np.isnan(r)]
@@ -281,6 +321,11 @@ def figure_curves(args, figures_dir):
     ax.legend(loc="lower right")
     p2 = figures_dir / "fig_reward_curve.png"
     fig.savefig(p2); plt.close(fig); print(f"Saved {p2}")
+    save_table(
+        figures_dir / "fig_reward_curve.dat",
+        ["timesteps", "reward_raw", "reward_smoothed"],
+        zip(ts, rw, smooth(rw)),
+    )
 
 
 def main() -> None:

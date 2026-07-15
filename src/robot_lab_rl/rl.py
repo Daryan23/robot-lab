@@ -8,6 +8,7 @@ import numpy as np
 from gymnasium import ActionWrapper, spaces
 
 from robot_lab_rl import BoxPushEnv, BoxPushHeuristicPolicy
+from robot_lab_rl.envs.box_push_env import DEFAULT_NUM_ROBOTS
 
 
 DEFAULT_MODEL_DIR = Path("models/box_push_ppo")
@@ -21,7 +22,10 @@ class FlatActionWrapper(ActionWrapper):
     def __init__(self, env: BoxPushEnv) -> None:
         super().__init__(env)
         self.max_wheel_speed = env.drive.max_wheel_speed
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        self.flat_action_dim = 2 * env.num_robots
+        self.action_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(self.flat_action_dim,), dtype=np.float32
+        )
 
     def action(self, action):
         normalized_action = np.asarray(action, dtype=np.float32).reshape(self.env.action_space.shape)
@@ -56,7 +60,10 @@ class ResidualActionWrapper(gym.Wrapper):
             raise ValueError("residual_scale must be positive.")
         self.expert = expert or BoxPushHeuristicPolicy()
         self.residual_scale = float(residual_scale)
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        self.action_dim = 2 * env.unwrapped.num_robots
+        self.action_space = spaces.Box(
+            low=-1.0, high=1.0, shape=(self.action_dim,), dtype=np.float32
+        )
         self._last_observation: np.ndarray | None = None
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
@@ -67,10 +74,10 @@ class ResidualActionWrapper(gym.Wrapper):
     def step(self, residual):
         if self._last_observation is None:
             raise RuntimeError("Call reset() before step().")
-        residual = np.asarray(residual, dtype=np.float32).reshape(4)
+        residual = np.asarray(residual, dtype=np.float32).reshape(self.action_dim)
         expert_action = np.asarray(
             self.expert.predict(self._last_observation), dtype=np.float32
-        ).reshape(4)
+        ).reshape(self.action_dim)
         correction = self.residual_scale * residual
         composed = np.clip(expert_action + correction, -1.0, 1.0).astype(np.float32)
         observation, reward, terminated, truncated, info = self.env.step(composed)
@@ -94,6 +101,7 @@ def make_box_push_env(
     residual: bool = False,
     residual_scale: float = DEFAULT_RESIDUAL_SCALE,
     expert: BoxPushHeuristicPolicy | None = None,
+    num_robots: int = DEFAULT_NUM_ROBOTS,
 ):
     env = FlatActionWrapper(
         BoxPushEnv(
@@ -101,6 +109,7 @@ def make_box_push_env(
             difficulty=difficulty,
             max_steps=max_steps,
             randomization=randomization,
+            num_robots=num_robots,
         )
     )
     if residual:

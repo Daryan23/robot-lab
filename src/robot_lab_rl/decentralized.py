@@ -28,10 +28,24 @@ from stable_baselines3.common.vec_env.base_vec_env import (
     VecEnvStepReturn,
 )
 
-from robot_lab_rl.envs.box_push_env import BoxPushEnv
+from robot_lab_rl.envs.box_push_env import DEFAULT_NUM_ROBOTS, BoxPushEnv
 
-# Length of one robot's egocentric observation vector (see below).
-EGO_OBS_DIM = 17
+# How many nearest other robots each robot sees in its egocentric observation.
+DEFAULT_NUM_NEIGHBORS = 2
+
+# One egocentric observation = 11 self/box/zone features, then 3 numbers per
+# included neighbor (relative x, y, heading), then 3 box-geometry numbers.
+_EGO_BASE_DIM = 11
+_EGO_GEOMETRY_DIM = 3
+
+
+def ego_obs_dim(num_neighbors: int = DEFAULT_NUM_NEIGHBORS) -> int:
+    """Length of one robot's egocentric observation for ``num_neighbors``."""
+    return _EGO_BASE_DIM + 3 * num_neighbors + _EGO_GEOMETRY_DIM
+
+
+# Default egocentric observation length (two nearest neighbors).
+EGO_OBS_DIM = ego_obs_dim()
 
 
 def _to_robot_frame(dx: float, dy: float, yaw: float) -> tuple[float, float]:
@@ -50,55 +64,60 @@ def _normalize_angle(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
-def egocentric_observation(env: BoxPushEnv, robot_index: int) -> np.ndarray:
+def egocentric_observation(
+    env: BoxPushEnv,
+    robot_index: int,
+    num_neighbors: int = DEFAULT_NUM_NEIGHBORS,
+) -> np.ndarray:
     """Build the local observation of one robot, from *its* point of view.
 
     Everything is expressed relative to the robot and rotated into its heading
-    frame, so the vector is the kind of signal a real e-puck-style sensor would
-    produce (it never knows its absolute world coordinates). For ``n > 2`` we
-    include the *nearest* other robot, which keeps the dimensionality fixed.
+    frame, so the robot spans its *own* coordinate system and never sees
+    absolute world coordinates (the kind of signal a real e-puck-style sensor
+    would produce). We include the ``num_neighbors`` *nearest* other robots,
+    sorted by distance, which keeps the dimensionality fixed for any team size.
+    If fewer other robots exist, the remaining neighbor slots are zero-padded.
     """
     robot_x, robot_y, yaw = env.robot_states[robot_index]
     box = env.box
     zone_x, zone_y = env.zone_position
 
-    other_indices = [j for j in range(env.num_robots) if j != robot_index]
-    nearest = min(
-        other_indices,
+    other_indices = sorted(
+        (j for j in range(env.num_robots) if j != robot_index),
         key=lambda j: math.hypot(
             env.robot_states[j][0] - robot_x,
             env.robot_states[j][1] - robot_y,
         ),
     )
-    other_x, other_y, other_yaw = env.robot_states[nearest]
 
     box_rel_x, box_rel_y = _to_robot_frame(box.x - robot_x, box.y - robot_y, yaw)
     box_vel_x, box_vel_y = _to_robot_frame(box.vx, box.vy, yaw)
     zone_rel_x, zone_rel_y = _to_robot_frame(zone_x - robot_x, zone_y - robot_y, yaw)
-    other_rel_x, other_rel_y = _to_robot_frame(other_x - robot_x, other_y - robot_y, yaw)
 
-    return np.array(
-        [
-            math.cos(yaw),
-            math.sin(yaw),
-            box_rel_x,
-            box_rel_y,
-            _normalize_angle(box.angle - yaw),
-            box_vel_x,
-            box_vel_y,
-            box.omega,
-            zone_rel_x,
-            zone_rel_y,
-            _normalize_angle(env.target_angle - yaw),
-            other_rel_x,
-            other_rel_y,
-            _normalize_angle(other_yaw - yaw),
-            box.half_width,
-            box.half_height,
-            box.mass,
-        ],
-        dtype=np.float32,
-    )
+    features = [
+        math.cos(yaw),
+        math.sin(yaw),
+        box_rel_x,
+        box_rel_y,
+        _normalize_angle(box.angle - yaw),
+        box_vel_x,
+        box_vel_y,
+        box.omega,
+        zone_rel_x,
+        zone_rel_y,
+        _normalize_angle(env.target_angle - yaw),
+    ]
+
+    for slot in range(num_neighbors):
+        if slot < len(other_indices):
+            other_x, other_y, other_yaw = env.robot_states[other_indices[slot]]
+            other_rel_x, other_rel_y = _to_robot_frame(other_x - robot_x, other_y - robot_y, yaw)
+            features.extend([other_rel_x, other_rel_y, _normalize_angle(other_yaw - yaw)])
+        else:
+            features.extend([0.0, 0.0, 0.0])
+
+    features.extend([box.half_width, box.half_height, box.mass])
+    return np.array(features, dtype=np.float32)
 
 
 class SharedBoxPushVecEnv(VecEnv):
@@ -110,9 +129,15 @@ class SharedBoxPushVecEnv(VecEnv):
     shared policy from the pooled transitions of all robots.
     """
 
-    def __init__(self, env: BoxPushEnv, residual_scale: float = 0.0) -> None:
+    def __init__(
+        self,
+        env: BoxPushEnv,
+        residual_scale: float = 0.0,
+        num_neighbors: int = DEFAULT_NUM_NEIGHBORS,
+    ) -> None:
         self._env = env
         self._num_robots = env.num_robots
+        self._num_neighbors = num_neighbors
         self._max_wheel_speed = env.drive.max_wheel_speed
         # Residual Policy Learning: if > 0, the policy only adds a correction on
         # top of the geometric expert, so it starts at expert performance.
@@ -125,7 +150,7 @@ class SharedBoxPushVecEnv(VecEnv):
         observation_space = spaces.Box(
             low=-np.inf,
             high=np.inf,
-            shape=(EGO_OBS_DIM,),
+            shape=(ego_obs_dim(num_neighbors),),
             dtype=np.float32,
         )
         action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -135,7 +160,10 @@ class SharedBoxPushVecEnv(VecEnv):
     # -- observation assembly ------------------------------------------------
     def _all_observations(self) -> np.ndarray:
         return np.stack(
-            [egocentric_observation(self._env, i) for i in range(self._num_robots)]
+            [
+                egocentric_observation(self._env, i, self._num_neighbors)
+                for i in range(self._num_robots)
+            ]
         ).astype(np.float32)
 
     def actions_to_wheel_speeds(self, env: BoxPushEnv, policy_actions) -> np.ndarray:
@@ -216,67 +244,13 @@ class SharedBoxPushVecEnv(VecEnv):
         return [False for _ in self._resolve_indices(indices)]
 
 
-def collect_expert_demos(
-    difficulties: tuple[str, ...] = ("easy", "medium", "full"),
-    steps_per_difficulty: int = 20_000,
-    max_steps: int = 800,
-    randomization: float = 0.0,
-    seed: int = 0,
-) -> tuple[np.ndarray, np.ndarray]:
-    """Run the geometric expert and record decentralized imitation data.
-
-    The expert ([expert.py]) already decides per robot. For every simulation
-    step we pair *each* robot's egocentric observation with *that* robot's
-    expert wheel command, pooling both robots into one dataset. This is exactly
-    the data a shared policy should imitate: "given my local view, do what the
-    expert would do in my place".
-
-    Returns ``(observations (N, EGO_OBS_DIM), actions (N, 2))`` with actions in
-    the normalized ``[-1, 1]`` range of the shared action space.
-    """
-    # Imported lazily to avoid a heavy import at module load.
-    from robot_lab_rl import BoxPushHeuristicPolicy
-
-    expert = BoxPushHeuristicPolicy()
-    observations: list[np.ndarray] = []
-    actions: list[np.ndarray] = []
-
-    for difficulty in difficulties:
-        env = BoxPushEnv(
-            render_mode="direct",
-            difficulty=difficulty,
-            max_steps=max_steps,
-            randomization=randomization,
-        )
-        env.reset(seed=seed)
-        collected = 0
-        while collected < steps_per_difficulty:
-            global_observation = env._get_observation()
-            expert_action = np.asarray(expert.predict(global_observation), dtype=np.float32)
-            for i in range(env.num_robots):
-                observations.append(egocentric_observation(env, i))
-                actions.append(expert_action[2 * i : 2 * i + 2])
-            wheel_speeds = (
-                expert_action.reshape(env.num_robots, 2) * env.drive.max_wheel_speed
-            )
-            _, _, terminated, truncated, _ = env.step(wheel_speeds)
-            collected += env.num_robots
-            if terminated or truncated:
-                env.reset()
-        env.close()
-
-    return (
-        np.asarray(observations, dtype=np.float32),
-        np.asarray(actions, dtype=np.float32),
-    )
-
-
 def make_shared_box_push_vec_env(
     difficulty: str = "full",
     max_steps: int = 800,
     randomization: float = 0.0,
-    num_robots: int = 2,
+    num_robots: int = DEFAULT_NUM_ROBOTS,
     residual_scale: float = 0.0,
+    num_neighbors: int = DEFAULT_NUM_NEIGHBORS,
 ) -> SharedBoxPushVecEnv:
     """Build a parameter-sharing VecEnv around a single box-push world."""
     env = BoxPushEnv(
@@ -284,9 +258,8 @@ def make_shared_box_push_vec_env(
         difficulty=difficulty,
         max_steps=max_steps,
         randomization=randomization,
+        num_robots=num_robots,
     )
-    if env.num_robots != num_robots:
-        raise ValueError(
-            f"BoxPushEnv was built with {env.num_robots} robots, requested {num_robots}."
-        )
-    return SharedBoxPushVecEnv(env, residual_scale=residual_scale)
+    return SharedBoxPushVecEnv(
+        env, residual_scale=residual_scale, num_neighbors=num_neighbors
+    )

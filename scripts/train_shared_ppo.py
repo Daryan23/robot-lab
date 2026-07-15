@@ -41,7 +41,7 @@ def main() -> None:
         default=0.0,
         help="Residual Policy Learning: if > 0, the policy only adds a "
         "correction (this scale) on top of the geometric expert, starting at "
-        "expert performance. Try 0.3. No BC warm-start needed in this mode.",
+        "expert performance. Try 0.3.",
     )
     parser.add_argument("--learning-rate", type=float, default=2.5e-4)
     parser.add_argument("--ent-coef", type=float, default=0.01)
@@ -49,12 +49,6 @@ def main() -> None:
     parser.add_argument("--batch-size", type=int, default=512)
     parser.add_argument("--model-dir", type=Path, default=DEFAULT_MODEL_DIR)
     parser.add_argument("--log-dir", type=Path, default=DEFAULT_LOG_DIR)
-    parser.add_argument(
-        "--pretrained-model",
-        type=Path,
-        default=None,
-        help="Warm-start from a behavior-cloned model (see pretrain_shared_bc.py).",
-    )
     args = parser.parse_args()
 
     args.model_dir.mkdir(parents=True, exist_ok=True)
@@ -93,33 +87,21 @@ def main() -> None:
         vec_env = make_phase_env(difficulty)
 
         if model is None:
-            if args.pretrained_model is not None:
-                # Warm-start: keep the behavior-cloned weights, continue with PPO.
-                model = PPO.load(
-                    args.pretrained_model,
-                    env=vec_env,
-                    tensorboard_log=tensorboard_log,
-                )
-                model.verbose = 1
-                model.learning_rate = args.learning_rate
-                model.ent_coef = args.ent_coef
-                print(f"Warm-started from {args.pretrained_model}")
-            else:
-                model = PPO(
-                    "MlpPolicy",
-                    vec_env,
-                    verbose=1,
-                    tensorboard_log=tensorboard_log,
-                    n_steps=args.n_steps,
-                    batch_size=args.batch_size,
-                    gamma=0.995,
-                    gae_lambda=0.95,
-                    ent_coef=args.ent_coef,
-                    learning_rate=args.learning_rate,
-                    clip_range=0.2,
-                    max_grad_norm=0.5,
-                    policy_kwargs={"net_arch": [128, 128]},
-                )
+            model = PPO(
+                "MlpPolicy",
+                vec_env,
+                verbose=1,
+                tensorboard_log=tensorboard_log,
+                n_steps=args.n_steps,
+                batch_size=args.batch_size,
+                gamma=0.995,
+                gae_lambda=0.95,
+                ent_coef=args.ent_coef,
+                learning_rate=args.learning_rate,
+                clip_range=0.2,
+                max_grad_norm=0.5,
+                policy_kwargs={"net_arch": [128, 128]},
+            )
         else:
             model.set_env(vec_env)
 

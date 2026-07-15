@@ -6,7 +6,6 @@ from pathlib import Path
 import numpy as np
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback
-from stable_baselines3.common.utils import get_schedule_fn
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 
 from robot_lab_rl.envs.box_push_env import DIFFICULTIES
@@ -256,58 +255,6 @@ def curriculum_phases(total_timesteps: int) -> list[tuple[str, int]]:
     return [("easy", easy_steps), ("medium", medium_steps), ("full", full_steps)]
 
 
-def evaluate_model_on_difficulty(
-    model: PPO,
-    difficulty: str,
-    episodes: int,
-    max_episode_steps: int,
-    residual: bool = False,
-    residual_scale: float = DEFAULT_RESIDUAL_SCALE,
-) -> tuple[float, float, float]:
-    env = make_box_push_env(
-        difficulty=difficulty,
-        max_steps=max_episode_steps,
-        residual=residual,
-        residual_scale=residual_scale,
-    )
-    successes = 0
-    returns: list[float] = []
-    fit_errors: list[float] = []
-    try:
-        for _ in range(episodes):
-            observation, _ = env.reset()
-            episode_return = 0.0
-            info = {}
-            for _ in range(env.unwrapped.max_steps):
-                action, _ = model.predict(observation, deterministic=True)
-                observation, reward, terminated, truncated, info = env.step(action)
-                episode_return += float(reward)
-                if terminated or truncated:
-                    break
-            successes += int(info.get("box_in_zone", False))
-            returns.append(episode_return)
-            fit_errors.append(float(info.get("box_zone_fit_error", np.nan)))
-    finally:
-        env.close()
-    return successes / episodes, float(np.mean(returns)), float(np.nanmean(fit_errors))
-
-
-def apply_ppo_hyperparameters(
-    model: PPO,
-    learning_rate: float,
-    ent_coef: float,
-    clip_range: float,
-    target_kl: float | None,
-) -> None:
-    """Override PPO update settings after loading a pretrained model."""
-
-    model.learning_rate = learning_rate
-    model.lr_schedule = get_schedule_fn(learning_rate)
-    model.ent_coef = ent_coef
-    model.clip_range = get_schedule_fn(clip_range)
-    model.target_kl = target_kl
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train PPO on the box-push task.")
     parser.add_argument("--timesteps", type=int, default=2_000_000, help="Total PPO training timesteps.")
@@ -355,35 +302,12 @@ def main() -> None:
     parser.add_argument("--clip-range", type=float, default=0.2)
     parser.add_argument("--target-kl", type=float, default=None)
     parser.add_argument(
-        "--conservative-finetune",
-        action="store_true",
-        help=(
-            "Use small PPO updates for pretrained policies "
-            "(learning_rate=3e-5, ent_coef=0, clip_range=0.05, target_kl=0.01)."
-        ),
-    )
-    parser.add_argument("--pretrained-model", type=Path, default=None, help="Optional BC/pretrained PPO .zip model.")
-    parser.add_argument("--pretrained-gate-episodes", type=int, default=20)
-    parser.add_argument("--pretrained-gate-difficulty", choices=DIFFICULTIES, default="easy")
-    parser.add_argument("--min-pretrained-success", type=float, default=0.80)
-    parser.add_argument(
-        "--skip-pretrained-gate",
-        action="store_true",
-        help="Allow PPO fine-tuning even if the pretrained model fails the easy-task gate.",
-    )
-    parser.add_argument(
         "--seed",
         type=int,
         default=None,
         help="Random seed for PPO. Use different seeds across runs to produce error-band figures.",
     )
     args = parser.parse_args()
-
-    if args.conservative_finetune:
-        args.learning_rate = 3e-5
-        args.ent_coef = 0.0
-        args.clip_range = 0.05
-        args.target_kl = 0.01
 
     args.model_dir.mkdir(parents=True, exist_ok=True)
     args.log_dir.mkdir(parents=True, exist_ok=True)
@@ -453,44 +377,10 @@ def main() -> None:
                     },
                 )
                 zero_init_residual_policy(model)
-                if args.pretrained_model is not None:
-                    print(
-                        "Residual mode: ignoring --pretrained-model and starting from a "
-                        "zero-init correction policy (action starts equal to the expert)."
-                    )
                 print(
                     "Residual mode: the scripted expert stays in the control loop; the policy "
                     f"learns a bounded correction (scale={args.residual_scale})."
                 )
-            elif args.pretrained_model is not None:
-                model = PPO.load(args.pretrained_model, env=env, tensorboard_log=str(args.log_dir))
-                model.verbose = 1
-                apply_ppo_hyperparameters(
-                    model,
-                    learning_rate=args.learning_rate,
-                    ent_coef=args.ent_coef,
-                    clip_range=args.clip_range,
-                    target_kl=args.target_kl,
-                )
-                print(f"Loaded pretrained model: {args.pretrained_model}")
-                if not args.skip_pretrained_gate:
-                    success_rate, average_return, average_fit_error = evaluate_model_on_difficulty(
-                        model,
-                        args.pretrained_gate_difficulty,
-                        args.pretrained_gate_episodes,
-                        args.max_episode_steps,
-                    )
-                    print(
-                        f"Pretrained gate on {args.pretrained_gate_difficulty}: "
-                        f"success={success_rate:.1%}, return={average_return:.2f}, "
-                        f"fit_error={average_fit_error:.3f} m"
-                    )
-                    if success_rate < args.min_pretrained_success:
-                        raise SystemExit(
-                            "Pretrained gate failed. Do not fine-tune this model yet. "
-                            "Run scripts/build_box_push_prior.py until it passes, or pass "
-                            "--skip-pretrained-gate only for debugging."
-                        )
             else:
                 model = PPO(
                     "MlpPolicy",
