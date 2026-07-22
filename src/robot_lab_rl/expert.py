@@ -6,6 +6,63 @@ from dataclasses import dataclass
 import numpy as np
 
 
+def distribute_push_points(
+    box_x: float,
+    box_y: float,
+    direction_x: float,
+    direction_y: float,
+    num_robots: int,
+    behind_distance: float,
+    lateral_span: float,
+) -> tuple[tuple[float, float], ...]:
+    """Spread ``num_robots`` push points across the box face away from the zone.
+
+    ``direction`` points from the box toward the zone, so the points sit
+    ``behind_distance`` behind the box and are fanned out laterally between
+    ``-lateral_span`` and ``+lateral_span``. For two robots this reproduces the
+    original symmetric ``±lateral_span`` pair.
+    """
+    perpendicular_x = -direction_y
+    perpendicular_y = direction_x
+    base_x = box_x - direction_x * behind_distance
+    base_y = box_y - direction_y * behind_distance
+    if num_robots <= 1:
+        offsets = [0.0]
+    else:
+        offsets = [lateral_span * (2.0 * i / (num_robots - 1) - 1.0) for i in range(num_robots)]
+    return tuple(
+        (base_x + perpendicular_x * offset, base_y + perpendicular_y * offset)
+        for offset in offsets
+    )
+
+
+def greedy_assign(
+    robot_points: list[tuple[float, float]],
+    push_points: tuple[tuple[float, float], ...],
+) -> tuple[tuple[float, float], ...]:
+    """Assign push points to robots, greedily matching the closest pairs first.
+
+    Returns the push points reordered so entry ``i`` is the point assigned to
+    robot ``i``. Generalizes the old two-robot "direct vs swapped" choice to any
+    number of robots.
+    """
+    pairs = sorted(
+        (math.hypot(robot_x - push_x, robot_y - push_y), robot_index, push_index)
+        for robot_index, (robot_x, robot_y) in enumerate(robot_points)
+        for push_index, (push_x, push_y) in enumerate(push_points)
+    )
+    assignment: list[tuple[float, float] | None] = [None] * len(robot_points)
+    used_robots: set[int] = set()
+    used_points: set[int] = set()
+    for _distance, robot_index, push_index in pairs:
+        if robot_index in used_robots or push_index in used_points:
+            continue
+        assignment[robot_index] = push_points[push_index]
+        used_robots.add(robot_index)
+        used_points.add(push_index)
+    return tuple(point for point in assignment if point is not None)
+
+
 @dataclass(frozen=True)
 class ExpertConfig:
     wheel_distance: float = 0.055
@@ -27,21 +84,39 @@ class BoxPushHeuristicPolicy:
 
     def predict(self, observation: np.ndarray) -> np.ndarray:
         obs = np.asarray(observation, dtype=np.float32)
-        if obs.shape not in {(11,), (18,)}:
-            raise ValueError(f"Expected observation shape (11,) or (18,), got {obs.shape}")
+        length = obs.shape[0]
 
-        robot_poses = [(float(obs[0]), float(obs[1]), float(obs[2])), (float(obs[3]), float(obs[4]), float(obs[5]))]
-        box_pose = (float(obs[6]), float(obs[7]), float(obs[8]))
-        if obs.shape == (18,):
-            zone_position = (float(obs[12]), float(obs[13]))
-            target_angle = float(obs[14])
-            box_half_width = float(obs[15])
-            box_half_height = float(obs[16])
-        else:
+        if obs.shape == (11,):
+            # Legacy reduced two-robot observation (no box velocity).
+            num_robots = 2
+            robot_poses = [
+                (float(obs[0]), float(obs[1]), float(obs[2])),
+                (float(obs[3]), float(obs[4]), float(obs[5])),
+            ]
+            box_pose = (float(obs[6]), float(obs[7]), float(obs[8]))
             zone_position = (float(obs[9]), float(obs[10]))
             target_angle = 0.0
             box_half_width = self.config.box_half_width
             box_half_height = self.config.box_half_height
+        elif length >= 15 and (length - 12) % 3 == 0:
+            # Full global observation: 3*N robot poses, then box (6), zone (3),
+            # box geometry (3). N is inferred from the length.
+            num_robots = (length - 12) // 3
+            robot_poses = [
+                (float(obs[3 * i]), float(obs[3 * i + 1]), float(obs[3 * i + 2]))
+                for i in range(num_robots)
+            ]
+            base = 3 * num_robots
+            box_pose = (float(obs[base]), float(obs[base + 1]), float(obs[base + 2]))
+            zone_position = (float(obs[base + 6]), float(obs[base + 7]))
+            target_angle = float(obs[base + 8])
+            box_half_width = float(obs[base + 9])
+            box_half_height = float(obs[base + 10])
+        else:
+            raise ValueError(
+                f"Expected observation shape (11,) or (3*N+12,), got {obs.shape}"
+            )
+
         push_points = self.assigned_push_points(
             robot_poses,
             box_pose,
@@ -55,20 +130,19 @@ class BoxPushHeuristicPolicy:
             self._robot_action(robot_pose, push_point, box_pose, zone_position)
             for robot_pose, push_point in zip(robot_poses, push_points)
         ]
-        return np.asarray(actions, dtype=np.float32).reshape(4)
+        return np.asarray(actions, dtype=np.float32).reshape(2 * num_robots)
 
     def push_points(
         self,
         box_pose: tuple[float, float, float],
         zone_position: tuple[float, float],
+        num_robots: int,
         target_angle: float = 0.0,
         box_half_width: float | None = None,
         box_half_height: float | None = None,
-    ) -> tuple[tuple[float, float], tuple[float, float]]:
+    ) -> tuple[tuple[float, float], ...]:
         box_x, box_y, box_angle = box_pose
         direction_x, direction_y = self._box_to_zone_direction(box_pose, zone_position)
-        perpendicular_x = -direction_y
-        perpendicular_y = direction_x
         half_width = self.config.box_half_width if box_half_width is None else box_half_width
         half_height = self.config.box_half_height if box_half_height is None else box_half_height
         behind_distance = (
@@ -76,15 +150,18 @@ class BoxPushHeuristicPolicy:
             + self.config.robot_radius
             + self.config.push_point_extra_margin
         )
-        base_x = box_x - direction_x * behind_distance
-        base_y = box_y - direction_y * behind_distance
-        lateral_offset = max(self.config.push_lateral_offset, min(half_height + 0.025, half_height * 1.1))
+        lateral_span = max(self.config.push_lateral_offset, min(half_height + 0.025, half_height * 1.1))
         angle_error = self._normalize_angle(target_angle - box_angle)
         if abs(angle_error) > 0.25 and half_width > half_height * 1.8:
-            lateral_offset = min(half_width * 0.75, max(lateral_offset, half_height + 0.06))
-        return (
-            (base_x + perpendicular_x * lateral_offset, base_y + perpendicular_y * lateral_offset),
-            (base_x - perpendicular_x * lateral_offset, base_y - perpendicular_y * lateral_offset),
+            lateral_span = min(half_width * 0.75, max(lateral_span, half_height + 0.06))
+        return distribute_push_points(
+            box_x,
+            box_y,
+            direction_x,
+            direction_y,
+            num_robots,
+            behind_distance,
+            lateral_span,
         )
 
     def assigned_push_points(
@@ -95,19 +172,17 @@ class BoxPushHeuristicPolicy:
         target_angle: float = 0.0,
         box_half_width: float | None = None,
         box_half_height: float | None = None,
-    ) -> tuple[tuple[float, float], tuple[float, float]]:
+    ) -> tuple[tuple[float, float], ...]:
         points = self.push_points(
             box_pose,
             zone_position,
+            len(robot_poses),
             target_angle=target_angle,
             box_half_width=box_half_width,
             box_half_height=box_half_height,
         )
         robot_points = [(x, y) for x, y, _ in robot_poses]
-        direct = self._assignment_distance(robot_points, points)
-        swapped = (points[1], points[0])
-        swapped_distance = self._assignment_distance(robot_points, swapped)
-        return points if direct <= swapped_distance else swapped
+        return greedy_assign(robot_points, points)
 
     def _robot_action(
         self,
@@ -176,16 +251,6 @@ class BoxPushHeuristicPolicy:
         if distance < 1e-8:
             return 1.0, 0.0
         return dx / distance, dy / distance
-
-    @staticmethod
-    def _assignment_distance(
-        robot_points: list[tuple[float, float]],
-        push_points: tuple[tuple[float, float], tuple[float, float]],
-    ) -> float:
-        return sum(
-            math.hypot(robot_x - push_x, robot_y - push_y)
-            for (robot_x, robot_y), (push_x, push_y) in zip(robot_points, push_points)
-        )
 
     @staticmethod
     def _normalize_angle(angle: float) -> float:

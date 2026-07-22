@@ -7,11 +7,15 @@ import numpy as np
 from gymnasium import spaces
 
 from robot_lab_rl.envs.circle_robot_env import CircleRobotEnv, DynamicObject2D
+from robot_lab_rl.expert import distribute_push_points, greedy_assign
+
+
+DEFAULT_NUM_ROBOTS = 3
 
 
 @dataclass(frozen=True)
 class BoxPushLayout:
-    robot_positions: tuple[tuple[float, float], tuple[float, float]]
+    robot_positions: tuple[tuple[float, float], ...]
     box_position: tuple[float, float]
     zone_position: tuple[float, float]
     box_angle: float = 0.0
@@ -111,11 +115,14 @@ class BoxPushEnv(CircleRobotEnv):
         zone_half_height: float = 0.10,
         difficulty: str = "full",
         randomization: float = 0.0,
+        num_robots: int = DEFAULT_NUM_ROBOTS,
     ) -> None:
         if difficulty not in LAYOUTS:
             raise ValueError(f"Unsupported difficulty: {difficulty}")
         if randomization < 0.0:
             raise ValueError("randomization must be non-negative.")
+        if num_robots < 1:
+            raise ValueError("num_robots must be at least 1.")
         layout = LAYOUTS[difficulty]
         super().__init__(
             render_mode=render_mode,
@@ -123,7 +130,7 @@ class BoxPushEnv(CircleRobotEnv):
             arena_height=arena_height,
             time_step=time_step,
             max_steps=max_steps,
-            num_robots=2,
+            num_robots=num_robots,
         )
         self.difficulty = difficulty
         self.layout = layout
@@ -142,51 +149,24 @@ class BoxPushEnv(CircleRobotEnv):
         self.previous_team_robot_box_distance = 0.0
         self.best_box_zone_distance = 0.0
         self.last_useful_progress_step = 0
+        # Observation = num_robots poses (x, y, yaw), then box (x, y, angle, vx,
+        # vy, omega), zone (x, y, target_angle), box geometry (half_width,
+        # half_height, mass). Total length is 3 * num_robots + 12.
+        half_w = arena_width / 2.0
+        half_h = arena_height / 2.0
+        robot_low = [-half_w, -half_h, -math.pi] * num_robots
+        robot_high = [half_w, half_h, math.pi] * num_robots
+        box_low = [-half_w, -half_h, -math.pi, -1.0, -1.0, -8.0]
+        box_high = [half_w, half_h, math.pi, 1.0, 1.0, 8.0]
+        zone_low = [-half_w, -half_h, -math.pi]
+        zone_high = [half_w, half_h, math.pi]
+        geometry_low = [0.0, 0.0, 0.0]
+        geometry_high = [0.25, 0.25, 2.0]
         observation_low = np.array(
-            [
-                -arena_width / 2.0,
-                -arena_height / 2.0,
-                -math.pi,
-                -arena_width / 2.0,
-                -arena_height / 2.0,
-                -math.pi,
-                -arena_width / 2.0,
-                -arena_height / 2.0,
-                -math.pi,
-                -1.0,
-                -1.0,
-                -8.0,
-                -arena_width / 2.0,
-                -arena_height / 2.0,
-                -math.pi,
-                0.0,
-                0.0,
-                0.0,
-            ],
-            dtype=np.float32,
+            robot_low + box_low + zone_low + geometry_low, dtype=np.float32
         )
         observation_high = np.array(
-            [
-                arena_width / 2.0,
-                arena_height / 2.0,
-                math.pi,
-                arena_width / 2.0,
-                arena_height / 2.0,
-                math.pi,
-                arena_width / 2.0,
-                arena_height / 2.0,
-                math.pi,
-                1.0,
-                1.0,
-                8.0,
-                arena_width / 2.0,
-                arena_height / 2.0,
-                math.pi,
-                0.25,
-                0.25,
-                2.0,
-            ],
-            dtype=np.float32,
+            robot_high + box_high + zone_high + geometry_high, dtype=np.float32
         )
         self.observation_space = spaces.Box(
             low=observation_low,
@@ -384,11 +364,8 @@ class BoxPushEnv(CircleRobotEnv):
         ]
 
     def push_setup_distance(self) -> float:
-        push_points = self.push_points()
         robot_points = [(x, y) for x, y, _ in self.robot_states]
-        direct = self._assignment_distance(robot_points, push_points)
-        swapped = self._assignment_distance(robot_points, (push_points[1], push_points[0]))
-        return min(direct, swapped)
+        return self._assignment_distance(robot_points, self.assigned_push_points())
 
     def robot_box_distance(self) -> float:
         return min(self.robot_box_distances())
@@ -426,10 +403,14 @@ class BoxPushEnv(CircleRobotEnv):
                 contact_points.append((local_x, local_y))
         if len(contact_points) < 2:
             return 0.0
-        lateral_separation = abs(contact_points[0][1] - contact_points[1][1])
-        longitudinal_separation = abs(contact_points[0][0] - contact_points[1][0])
+        max_separation = 0.0
+        for i in range(len(contact_points)):
+            for j in range(i + 1, len(contact_points)):
+                lateral_separation = abs(contact_points[i][1] - contact_points[j][1])
+                longitudinal_separation = abs(contact_points[i][0] - contact_points[j][0])
+                max_separation = max(max_separation, lateral_separation, longitudinal_separation)
         useful_span = max(self.box.half_height * 1.4, self.box.half_width * 0.6, 1e-6)
-        return float(np.clip(max(lateral_separation, longitudinal_separation) / useful_span, 0.0, 1.0))
+        return float(np.clip(max_separation / useful_span, 0.0, 1.0))
 
     def box_velocity_toward_zone(self) -> float:
         direction_x, direction_y = self.box_to_zone_direction()
@@ -475,27 +456,24 @@ class BoxPushEnv(CircleRobotEnv):
             qualities.append(self.behind_box_quality() * float(np.clip(push_alignment, 0.0, 1.0)))
         return float(np.mean(qualities))
 
-    def push_points(self) -> tuple[tuple[float, float], tuple[float, float]]:
+    def push_points(self) -> tuple[tuple[float, float], ...]:
         direction_x, direction_y = self.box_to_zone_direction()
-        perpendicular_x = -direction_y
-        perpendicular_y = direction_x
         box_margin = max(self.box.half_width, self.box.half_height)
         behind_distance = box_margin + self.drive.robot_radius + 0.035
-        lateral_offset = min(self.box.half_height + 0.03, max(0.07, self.box.half_height * 0.95))
-        base_x = self.box.x - direction_x * behind_distance
-        base_y = self.box.y - direction_y * behind_distance
-        return (
-            (base_x + perpendicular_x * lateral_offset, base_y + perpendicular_y * lateral_offset),
-            (base_x - perpendicular_x * lateral_offset, base_y - perpendicular_y * lateral_offset),
+        lateral_span = min(self.box.half_height + 0.03, max(0.07, self.box.half_height * 0.95))
+        return distribute_push_points(
+            self.box.x,
+            self.box.y,
+            direction_x,
+            direction_y,
+            self.num_robots,
+            behind_distance,
+            lateral_span,
         )
 
-    def assigned_push_points(self) -> tuple[tuple[float, float], tuple[float, float]]:
-        push_points = self.push_points()
+    def assigned_push_points(self) -> tuple[tuple[float, float], ...]:
         robot_points = [(x, y) for x, y, _ in self.robot_states]
-        direct = self._assignment_distance(robot_points, push_points)
-        swapped_points = (push_points[1], push_points[0])
-        swapped = self._assignment_distance(robot_points, swapped_points)
-        return push_points if direct <= swapped else swapped_points
+        return greedy_assign(robot_points, self.push_points())
 
     def box_to_zone_direction(self) -> tuple[float, float]:
         zone_x, zone_y = self.zone_position
@@ -516,11 +494,30 @@ class BoxPushEnv(CircleRobotEnv):
             for (robot_x, robot_y), (push_x, push_y) in zip(robot_points, push_points)
         )
 
-    def _start_positions(self) -> list[tuple[float, float]]:
+    def _expand_positions(
+        self, base_positions: tuple[tuple[float, float], ...], num_robots: int
+    ) -> list[tuple[float, float]]:
+        """Spread ``num_robots`` start positions across the listed base points.
+
+        Layouts list two reference positions; extra robots are placed by evenly
+        interpolating along the line between the first and last base point, so
+        the whole team stays in the intended start region for any ``num_robots``.
+        """
+        if num_robots <= len(base_positions):
+            return list(base_positions[:num_robots])
+        first = base_positions[0]
+        last = base_positions[-1]
         return [
-            self._jitter_point(position, self.randomization)
-            for position in self.layout.robot_positions
+            (
+                first[0] + (last[0] - first[0]) * i / (num_robots - 1),
+                first[1] + (last[1] - first[1]) * i / (num_robots - 1),
+            )
+            for i in range(num_robots)
         ]
+
+    def _start_positions(self) -> list[tuple[float, float]]:
+        positions = self._expand_positions(self.layout.robot_positions, self.num_robots)
+        return [self._jitter_point(position, self.randomization) for position in positions]
 
     def _create_random_dynamic_objects(self) -> list[DynamicObject2D]:
         layout = self.layout
@@ -557,21 +554,21 @@ class BoxPushEnv(CircleRobotEnv):
         direction_length = max(math.hypot(direction_x, direction_y), 1e-6)
         direction_x /= direction_length
         direction_y /= direction_length
-        perpendicular_x = -direction_y
-        perpendicular_y = direction_x
         behind_distance = max(box_half_width, box_half_height) + self.drive.robot_radius + 0.36
         lateral_offset = float(self.np_random.uniform(0.16, 0.22))
         base_x = box_x - direction_x * behind_distance
         base_y = box_y - direction_y * behind_distance
-        robot_positions = (
-            self._clip_robot_start(
-                base_x + perpendicular_x * lateral_offset,
-                base_y + perpendicular_y * lateral_offset,
-            ),
-            self._clip_robot_start(
-                base_x - perpendicular_x * lateral_offset,
-                base_y - perpendicular_y * lateral_offset,
-            ),
+        robot_positions = tuple(
+            self._clip_robot_start(point_x, point_y)
+            for point_x, point_y in distribute_push_points(
+                base_x,
+                base_y,
+                direction_x,
+                direction_y,
+                self.num_robots,
+                behind_distance=0.0,
+                lateral_span=lateral_offset,
+            )
         )
         zone_half_width = float(np.clip(box_half_width + 0.30, 0.38, 0.48))
         zone_half_height = float(np.clip(box_half_height + 0.27, 0.31, 0.40))
@@ -604,16 +601,23 @@ class BoxPushEnv(CircleRobotEnv):
             distance <= self.drive.robot_radius + 0.012
             for distance in self.robot_box_distances()
         )
+        # "Gravity-like" cooperation: the box behaves as if its weight scales
+        # with the number of robots on the field. Only the *whole* team moving
+        # together shifts it at full speed; a partial team moves it roughly in
+        # proportion to how much of the team is pushing (like being too few to
+        # lift a heavy object), so it always takes all ``num_robots`` to work
+        # it properly.
+        required = self.num_robots
+        if contacts >= required:
+            return 0.65 + 0.35 * self.complementary_contact_quality()
         assigned_points = self.assigned_push_points()
         near_assigned_points = all(
             math.hypot(robot_x - point_x, robot_y - point_y) <= 0.09
             for (robot_x, robot_y, _), (point_x, point_y) in zip(self.robot_states, assigned_points)
         )
-        if contacts < 2:
-            if near_assigned_points:
-                return 0.65
-            return 0.28
-        return 0.65 + 0.35 * self.complementary_contact_quality()
+        participation = contacts / max(required, 1)
+        positioning = 1.0 if near_assigned_points else 0.6
+        return 0.65 * participation * positioning
 
     def _jitter_point(self, point: tuple[float, float], amount: float) -> tuple[float, float]:
         if amount <= 0.0:

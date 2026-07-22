@@ -153,129 +153,44 @@ Run a short random-policy simulation without graphics:
 This is useful for checking that the Gymnasium-style environment runs without
 opening the 2D manual viewer.
 
-## Gated Prior and Pretraining
+## The Scripted Expert
 
-Do not start PPO from a random policy, and do not continue from a weak behavior
-cloned model. The recommended flow is now gated:
+The single training method in this repo is **Residual Policy Learning**: the
+hand-written `BoxPushHeuristicPolicy` stays in the control loop and PPO only
+learns a bounded correction on top of it. There is no behavior-cloning or prior
+step to run first.
 
-1. verify the scripted expert can solve the easy task
-2. collect successful expert states with small start-position randomization
-3. behavior-clone the PPO policy
-4. run DAgger-style correction, where the policy visits its own bad states and
-   the expert labels what it should have done there
-5. save `models/box_push_ppo/box_push_prior.zip` only after evaluation
-
-Run the full prior builder:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/build_box_push_prior.py \
-  --difficulty easy \
-  --seed-demo-steps 30000 \
-  --dagger-iterations 6 \
-  --dagger-episodes 20 \
-  --epochs-per-iteration 12 \
-  --eval-episodes 20 \
-  --min-success-rate 0.80
-```
-
-This command should print gates like:
-
-```text
-expert gate: success=...
-seed BC eval: success=...
-dagger rollout 1: success=...
-prior eval 1: success=...
-final prior gate: success=...
-```
-
-Only continue to PPO if `final prior gate` is at least `80%` on easy. If it
-fails, increase `--dagger-iterations` first; do not train PPO from that model.
-
-Watch the prior checkpoints while the prior builder runs:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --source prior --difficulty easy
-```
-
-Evaluate the final prior:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/evaluate_box_push.py \
-  --model models/box_push_ppo/box_push_prior.zip \
-  --difficulty easy \
-  --episodes 20
-```
-
-For debugging, you can still watch the hand-written expert directly:
-
-Watch the expert directly:
+For debugging, you can watch the hand-written expert directly:
 
 ```bash
 "$PWD/.conda-env/bin/python" scripts/watch_box_push_expert.py --difficulty easy
 ```
 
-The older manual BC pieces are still available, but the gated prior builder is
-preferred because plain BC can overfit a small repeated trajectory and fail
-when the policy drifts away from expert states.
-
-Collect expert demonstrations manually:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/collect_box_push_demos.py --steps 200000
-```
-
-By default this collects successful `easy` demonstrations only. That is
-intentional: the current heuristic is a reliable warm-start expert for easy
-pushing, while medium/full are left for PPO fine-tuning. To include non-success
-progress trajectories for analysis, add `--difficulty all --include-progress-episodes`.
-
-Optionally watch collection while also saving the demo file:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/collect_box_push_demos.py \
-  --visual \
-  --difficulty easy \
-  --steps 2000
-```
-
-Pretrain the policy with behavior cloning:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/pretrain_box_push_bc.py \
-  --demo-path data/box_push_demos.npz \
-  --epochs 50 \
-  --checkpoint-every 5
-```
-
-BC saves checkpoints in `models/box_push_ppo/`, including
-`box_push_bc_pretrained.zip`. The prior builder also updates that path for
-compatibility, but its canonical output is `box_push_prior.zip`.
-
-Watch BC checkpoints while pretraining runs:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --source bc --difficulty easy
-```
-
 ## Train the Box-Push Agent
 
-Train PPO with the gated prior:
+Train the residual policy (the scripted expert stays in the loop, PPO learns a
+bounded correction that starts at zero, so the policy begins at expert level):
 
 ```bash
 "$PWD/.conda-env/bin/python" scripts/train_box_push_ppo.py \
-  --pretrained-model models/box_push_ppo/box_push_prior.zip
+  --residual --residual-scale 0.3
 ```
 
-The default is now `2,000,000` timesteps with 8 parallel environments. Training
-is intentionally headless and fast; speed alone does not mean the policy is
-good. PPO now checks the pretrained model before training; if the prior gets
-0% on easy, training stops instead of wasting time.
+For comparison you can also train PPO from scratch (no expert; the network
+learns the whole controller itself) by dropping the `--residual` flag:
 
-For a serious first run, use:
+```bash
+"$PWD/.conda-env/bin/python" scripts/train_box_push_ppo.py
+```
+
+The default is `2,000,000` timesteps with 8 parallel environments. Training is
+intentionally headless and fast; speed alone does not mean the policy is good.
+
+For a serious residual run, use:
 
 ```bash
 "$PWD/.conda-env/bin/python" scripts/train_box_push_ppo.py \
-  --pretrained-model models/box_push_ppo/box_push_prior.zip \
+  --residual --residual-scale 0.3 \
   --timesteps 5000000 \
   --num-envs 8 \
   --eval-every 100000 \
@@ -311,7 +226,7 @@ To train only one phase:
 
 ```bash
 "$PWD/.conda-env/bin/python" scripts/train_box_push_ppo.py \
-  --pretrained-model models/box_push_ppo/box_push_prior.zip \
+  --residual --residual-scale 0.3 \
   --difficulty full \
   --timesteps 2000000
 ```
@@ -379,16 +294,10 @@ For early curriculum debugging, you can watch the easier stage:
 "$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --difficulty easy
 ```
 
-To watch PPO checkpoints explicitly:
+To watch residual checkpoints:
 
 ```bash
-"$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --source ppo --difficulty full
-```
-
-To watch the prior instead:
-
-```bash
-"$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --source prior --difficulty easy
+"$PWD/.conda-env/bin/python" scripts/watch_training_progress.py --residual --difficulty full
 ```
 
 ## Evaluate a Trained Policy
@@ -428,6 +337,75 @@ To watch a specific checkpoint:
   --model models/box_push_ppo/box_push_ppo_10000_steps.zip
 ```
 
+## Decentralized Shared Policy (Residual Expert)
+
+This is the recommended setup for the cooperative box-push task. Instead of one
+central network that sees everything and controls both robots, a single shared
+network is called **once per robot** with that robot's own egocentric (local,
+relative) observation. Execution stays decentralized and the same network scales
+to `n > 2` robots unchanged.
+
+On top of that, the policy runs in **Residual Policy Learning** mode: it does not
+imitate the geometric expert, it *starts as* the expert and only learns a small
+correction:
+
+```text
+final_action = expert_action + residual_scale * policy_correction
+```
+
+Because the expert already solves the task, an untrained residual policy already
+performs at expert level (measured: `full` solved 10/10 untrained with
+`--residual-scale 0.3`). PPO then only refines it and adds robustness to
+randomized spawns. No behavior-cloning warm-start is needed in this mode.
+
+### Reproduce the working policy
+
+Train (residual mode, robust to random box/robot/zone positions):
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/train_shared_ppo.py \
+  --difficulty full \
+  --timesteps 1000000 \
+  --randomization 0.15 \
+  --residual-scale 0.3
+```
+
+Watch it (the `--residual-scale` MUST match the value used for training):
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/watch_shared_policy.py \
+  --model models/box_push_shared_ppo/box_push_shared_ppo_full_final.zip \
+  --difficulty full \
+  --randomization 0.15 \
+  --residual-scale 0.3
+```
+
+Spawn the box at random / different positions in the viewer:
+
+- `--randomization 0.15` jitters box, robots, and zone around the chosen layout
+  every episode.
+- `--difficulty coop_random` re-samples a full random layout (box size, mass,
+  position, angle, and zone) every episode.
+
+### Optional: curriculum
+
+Train through easier stages first, carrying the model forward:
+
+```bash
+"$PWD/.conda-env/bin/python" scripts/train_shared_ppo.py \
+  --curriculum easy medium full \
+  --timesteps 1500000 \
+  --residual-scale 0.3
+```
+
+Models are saved under `models/box_push_shared_ppo/` and TensorBoard logs under
+`runs/box_push_shared_ppo/` (both are git-ignored; regenerate with the commands
+above). The key reproduction detail is that residual models only behave
+correctly when loaded with the same `--residual-scale` they were trained with.
+
+> Note: on macOS you may hit `OMP: Error #15` from duplicate OpenMP runtimes.
+> If so, prefix the commands above with `KMP_DUPLICATE_LIB_OK=TRUE`.
+
 ## Optional PyBullet GUI Demo
 
 The project still supports opening PyBullet's GUI for debugging:
@@ -465,21 +443,21 @@ Current tests check:
 - `pyproject.toml`: local editable-package configuration.
 - `src/robot_lab_rl/envs/circle_robot_env.py`: Gymnasium-style 2D robot environment.
 - `src/robot_lab_rl/envs/box_push_env.py`: simple 2-robot, 1-box, 1-zone RL task.
-- `src/robot_lab_rl/expert.py`: scripted heuristic prior for demonstrations.
+- `src/robot_lab_rl/expert.py`: scripted heuristic expert kept in the residual control loop.
 - `src/robot_lab_rl/rl.py`: Stable-Baselines3 wrappers and checkpoint helpers.
+- `src/robot_lab_rl/decentralized.py`: egocentric observation, shared parameter-sharing VecEnv, and Residual Policy Learning.
+- `scripts/train_shared_ppo.py`: decentralized shared-policy PPO (residual, curriculum).
+- `scripts/watch_shared_policy.py`: residual-aware viewer for the shared policy.
 - `scripts/manual_drive.py`: pure 2D manual-driving sandbox.
 - `scripts/run_random_policy.py`: random-action simulation runner.
-- `scripts/collect_box_push_demos.py`: expert demonstration collection.
-- `scripts/pretrain_box_push_bc.py`: behavior cloning pretraining.
-- `scripts/build_box_push_prior.py`: gated expert, BC, and DAgger prior builder.
-- `scripts/train_box_push_ppo.py`: PPO training entry point.
+- `scripts/train_box_push_ppo.py`: PPO training entry point (residual, or scratch baseline).
 - `scripts/evaluate_box_push.py`: saved-policy evaluation.
 - `scripts/watch_box_push_expert.py`: heuristic expert viewer.
 - `scripts/watch_box_push_policy.py`: pure 2D saved-policy viewer.
 - `scripts/watch_training_progress.py`: live checkpoint viewer while training runs.
 - `tests/test_differential_drive.py`: movement, arena, keyboard, and object-physics tests.
 - `tests/test_box_push_env.py`: box-push task tests.
-- `tests/test_expert_and_bc.py`: expert, demo, BC, and checkpoint-source tests.
+- `tests/test_expert.py`: scripted-expert and checkpoint-selection tests.
 - `tests/test_rl_helpers.py`: RL wrapper and Stable-Baselines3 compatibility tests.
 
 ## Notes

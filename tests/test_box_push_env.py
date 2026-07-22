@@ -6,7 +6,7 @@ from scripts.manual_drive import ManualDriveApp
 
 
 def test_box_push_spawns_two_robots_one_box_and_one_zone():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         observation, _ = env.reset()
 
@@ -21,7 +21,7 @@ def test_box_push_spawns_two_robots_one_box_and_one_zone():
 
 
 def test_box_push_spaces_match_plan():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
 
@@ -32,7 +32,7 @@ def test_box_push_spaces_match_plan():
 
 
 def test_box_push_reward_improves_when_box_moves_toward_zone():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
         env.box.x = 0.0
@@ -52,7 +52,7 @@ def test_box_push_reward_improves_when_box_moves_toward_zone():
 
 
 def test_box_push_reward_improves_when_robots_move_toward_push_points():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
         _, reward_without_setup_progress, *_ = env.step(np.zeros((2, 2), dtype=np.float32))
@@ -70,7 +70,7 @@ def test_box_push_reward_improves_when_robots_move_toward_push_points():
 
 
 def test_box_push_success_when_box_enters_zone():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
         env.box.x, env.box.y = env.zone_position
@@ -86,7 +86,7 @@ def test_box_push_success_when_box_enters_zone():
 
 
 def test_box_push_does_not_succeed_when_box_only_touches_zone():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
         zone_x, zone_y = env.zone_position
@@ -104,7 +104,7 @@ def test_box_push_does_not_succeed_when_box_only_touches_zone():
 
 
 def test_box_push_reports_alignment_contact_and_stuck_metrics():
-    env = BoxPushEnv(render_mode="direct", difficulty="easy")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="easy")
     try:
         env.reset()
         _, _, _, _, info = env.step(
@@ -127,7 +127,7 @@ def test_box_push_reports_alignment_contact_and_stuck_metrics():
 
 
 def test_box_push_truncates_when_no_progress_is_made():
-    env = BoxPushEnv(render_mode="direct", difficulty="easy")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="easy")
     try:
         env.reset()
         truncated = False
@@ -144,7 +144,7 @@ def test_box_push_truncates_when_no_progress_is_made():
 
 
 def test_box_push_viewer_can_create_zone_and_box_items():
-    env = BoxPushEnv(render_mode="direct")
+    env = BoxPushEnv(render_mode="direct", num_robots=2)
     try:
         env.reset()
         app = ManualDriveApp(env)
@@ -159,7 +159,7 @@ def test_box_push_viewer_can_create_zone_and_box_items():
 
 @pytest.mark.parametrize("difficulty", ["coop_heavy", "coop_rotate", "coop_mixed", "coop_random"])
 def test_cooperative_layouts_configure_larger_task_objects(difficulty):
-    env = BoxPushEnv(render_mode="direct", difficulty=difficulty)
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty=difficulty)
     try:
         observation, _ = env.reset()
 
@@ -176,7 +176,7 @@ def test_cooperative_layouts_configure_larger_task_objects(difficulty):
 
 
 def test_coop_random_samples_shape_mass_target_and_starts_within_bounds():
-    env = BoxPushEnv(render_mode="direct", difficulty="coop_random")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="coop_random")
     try:
         observation, _ = env.reset(seed=2)
 
@@ -199,7 +199,7 @@ def test_coop_random_samples_shape_mass_target_and_starts_within_bounds():
 
 
 def test_coop_random_resamples_layouts_between_resets():
-    env = BoxPushEnv(render_mode="direct", difficulty="coop_random")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="coop_random")
     try:
         env.reset(seed=1)
         first = (env.box.half_width, env.box.half_height, env.box.mass, env.box.x, env.box.y, env.target_angle)
@@ -212,7 +212,7 @@ def test_coop_random_resamples_layouts_between_resets():
 
 
 def test_coop_rotate_requires_target_orientation_for_success():
-    env = BoxPushEnv(render_mode="direct", difficulty="coop_rotate")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="coop_rotate")
     try:
         env.reset()
         env.box.x, env.box.y = env.zone_position
@@ -234,7 +234,7 @@ def test_coop_rotate_requires_target_orientation_for_success():
 
 
 def test_cooperative_contact_reward_beats_single_robot_contact():
-    env = BoxPushEnv(render_mode="direct", difficulty="coop_heavy")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="coop_heavy")
     try:
         env.reset()
         contact_x = env.box.x - env.box.half_width - env.drive.robot_radius * 0.8
@@ -258,7 +258,7 @@ def test_cooperative_contact_reward_beats_single_robot_contact():
 
 
 def test_heavy_object_push_scale_requires_two_contacts():
-    env = BoxPushEnv(render_mode="direct", difficulty="coop_heavy")
+    env = BoxPushEnv(render_mode="direct", num_robots=2, difficulty="coop_heavy")
     try:
         env.reset()
         contact_x = env.box.x - env.box.half_width - env.drive.robot_radius * 0.8
